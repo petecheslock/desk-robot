@@ -81,8 +81,22 @@ PORT = 8765
 #   TTS_PRESENCE_DB
 #                 boost above ~1.5 kHz, where speech clarity lives, 0 = off.
 #                 Lifts a muffled voice; too much sounds thin and hissy.
+#   TTS_SERVER_URL
+#                 a speech server of your own, used instead of Fish Audio: the
+#                 address of anything serving the OpenAI audio API — POST
+#                 /v1/audio/speech with {model, voice, input} — on a LAN or
+#                 tailnet, e.g. http://host:8190. No key: nothing is sent with
+#                 the request. Set, it speaks; unset or unreachable, Fish
+#                 Audio, then this computer's own voice.
+#   TTS_SERVER_VOICE
+#                 which voice to ask that server for, by name (its
+#                 GET /v1/audio/voices lists them). Needed rather than
+#                 guessed: a server's default voice may be a cloning one that
+#                 wants a reference recording in every request.
 # The console page has sliders for level / bass cut / presence that apply
 # live; set the winners here to keep them.
+TTS_SERVER_URL = (os.environ.get("TTS_SERVER_URL") or "").rstrip("/")
+TTS_SERVER_VOICE = os.environ.get("TTS_SERVER_VOICE") or ""
 TTS_VOICE_ID = "6dd07916890445e59c5f019ad0fc7879"
 TTS_MODEL = ""    # Fish's model (its `model` header): "" = Fish's default, "drama-3" = Drama 3. A character sets its own
 TTS_ACTING = False  # the voice model performs [directions] and <whisper>...</whisper> (Drama 3), so they're kept in

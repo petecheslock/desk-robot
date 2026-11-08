@@ -1,6 +1,11 @@
 """Mouth: turn the robot's words into sound.
 
-Two voices:
+Three voices:
+  * your own speech server (config.TTS_SERVER_URL), when that's set: anything
+    that speaks the OpenAI audio API over plain HTTP — POST /v1/audio/speech
+    with {model, voice, input}, GET /v1/models to say what model that is. No
+    key. It answers at whatever rate its model speaks, so the audio is
+    resampled here.
   * Fish Audio (Rocky's real voice, config.TTS_VOICE_ID) when
     FISH_AUDIO_API_KEY is set. Plain HTTPS POST asking for raw 16 kHz PCM. The response body
     streams, so the first audio arrives ~0.3 s in, long before the sentence
@@ -25,7 +30,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import urllib.parse
 import urllib.request
 import wave
 from collections.abc import Iterator
@@ -37,11 +44,27 @@ import numpy as np
 from . import config
 
 SAMPLE_RATE = 16_000
+SERVER_RATE_FALLBACK = 24_000   # taken from the reply when a server says PCM rather than WAV
 FISH_TTS_URL = "https://api.fish.audio/v1/tts"
 
 
 def fish_available() -> bool:
     return bool(config.TTS_VOICE_ID and os.environ.get("FISH_AUDIO_API_KEY"))
+
+
+_server_warned = False
+
+
+def voice_server_available() -> bool:
+    """The URL alone turns the server on; a voice it has isn't optional, and saying so
+    beats sending a reply to a server that will refuse it and dropping to the built-in voice.
+    Said once: this is asked again per sentence, from the voice thread."""
+    global _server_warned
+    if config.TTS_SERVER_URL and not config.TTS_SERVER_VOICE and not _server_warned:
+        _server_warned = True
+        print("(TTS_SERVER_URL is set but TTS_SERVER_VOICE isn't: "
+              "GET /v1/audio/voices on that server lists its voices)")
+    return bool(config.TTS_SERVER_URL and config.TTS_SERVER_VOICE)
 
 
 _MARKUP = re.compile(r"[*_`#~<>\[\]{}|\\]")
@@ -129,6 +152,103 @@ def _fish_stream(text: str) -> Iterator[bytes]:
                 carry = b""
             if chunk:
                 yield chunk
+
+
+_SERVER: dict | None = None
+_SERVER_LOCK = threading.Lock()
+
+
+def _server() -> dict:
+    """What a speech server is: the model id it answers to, and the sample rate
+    its audio comes back at. Both asked for once and kept.
+
+    The id because it is whatever the operator named the model and a wrong one
+    is refused outright; the rate because a server answers at its own model's
+    rate whatever is asked for, and a reply that's played back at the wrong one
+    is chipmunk-voiced. The probe is a WAV, whose header states the rate, sent
+    through once at startup — streaming then asks for PCM, which has to be
+    assumed, since raw bytes say nothing about themselves.
+
+    No model id is failure: the rate probe would ask for "" and fail too,
+    and it is skipped rather than costing a dead endpoint the probe's timeout
+    before every sentence's own failure."""
+    global _SERVER
+    if _SERVER is not None:
+        return _SERVER
+    with _SERVER_LOCK:
+        if _SERVER is None:
+            _SERVER = _probe_server()
+    return _SERVER
+
+
+def _probe_server() -> dict:
+    base = config.TTS_SERVER_URL.rstrip("/")
+    model, rate = "", SERVER_RATE_FALLBACK
+    try:
+        req = urllib.request.Request(base + "/v1/models")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            models = json.loads(r.read()).get("data") or []
+        if models:
+            model = models[0].get("id") or ""
+    except Exception as e:
+        print(f"(speech server: couldn't read /v1/models: {e})")
+    if model:
+        try:
+            body = json.dumps({"model": model, "voice": config.TTS_SERVER_VOICE, "input": ".",
+                               "response_format": "wav"}).encode()
+            req = urllib.request.Request(base + "/v1/audio/speech", data=body,
+                                         method="POST", headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                raw, ctype = r.read(), r.headers.get("Content-Type") or ""
+            if raw[:4] == b"RIFF":       # a headerless answer may still say WAV
+                with wave.open(io.BytesIO(raw)) as w:
+                    rate = w.getframerate()
+        except Exception as e:
+            print(f"(speech server: couldn't check the voice's sample rate, assuming "
+                  f"{rate} Hz: {e})")
+    else:
+        print(f"(speech server: no model id from {base}/v1/models: treating it as unavailable)")
+    return {"model": model, "rate": rate}
+
+
+def _server_stream(text: str) -> Iterator[bytes]:
+    """The server's answer as 16 kHz chunks, yielded while it generates.
+
+    Asked for raw PCM rather than WAV on purpose: a WAV is buffered by servers,
+    because its header holds the length, so the audio would only arrive once the
+    sentence was finished. PCM comes out of the socket as it's made, which is
+    what keeps the speaker busy. Every chunk is resampled from the server's own
+    rate — chunk boundaries land on even sample counts, so no 16-bit sample is
+    ever split in half. No key goes with the request: these servers sit on a
+    LAN or tailnet and don't authenticate."""
+    s = _server()
+    if not s["model"]:   # nothing came back from /v1/models: this server can't answer a speech request
+        raise RuntimeError(f"no model id from {config.TTS_SERVER_URL}/v1/models")
+    body = json.dumps(
+        {
+            "model": s["model"],
+            "voice": config.TTS_SERVER_VOICE,
+            "input": text,
+            "response_format": "pcm",
+            "temperature": config.TTS_TEMPERATURE,
+            "top_p": config.TTS_TOP_P,
+        }
+    ).encode()
+    req = urllib.request.Request(config.TTS_SERVER_URL.rstrip("/") + "/v1/audio/speech", data=body,
+                                 method="POST", headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        if (resp.headers.get("Content-Type") or "").startswith("audio/wav"):
+            yield _wav_to_pcm16k(resp.read(), s["rate"])   # a server that won't stream: fine, just later
+            return
+        carry = b""      # a chunk boundary can still split a 16-bit sample in half
+        while chunk := resp.read(4096):
+            chunk = carry + chunk
+            if len(chunk) % 2:
+                chunk, carry = chunk[:-1], chunk[-1:]
+            else:
+                carry = b""
+            if chunk:
+                yield _resample_pcm(np.frombuffer(chunk, dtype=np.int16), s["rate"])
 
 
 class Biquad:
@@ -286,7 +406,7 @@ class Leveler:
         self.level = config.TTS_LEVEL
         self.ceiling = config.TTS_PEAK
         self.eq = Equalizer(config.TTS_HIGHPASS_HZ, config.TTS_PRESENCE_DB, auto=config.TTS_AUTO_PRESENCE,
-                            voice=f"{config.TTS_VOICE_ID}/{config.TTS_MODEL}")
+                            voice=self.equalizer_key())
         self.env = 0.0      # loudness estimate; 0 = nothing heard yet
         self.gain = 1.0
         self.cone_limit = config.TTS_CONE_LIMIT
@@ -301,6 +421,20 @@ class Leveler:
         # the last LOOKAHEAD samples, held back until the samples after them are known: high band, low band, gain,
         # and how far each band alone would move the cone
         self.held = [np.zeros(0, np.float32)] * 5
+
+    @staticmethod
+    def equalizer_key() -> str:
+        """Which voice this is, for the equalizer's per-voice memory: the speech server's when
+        that's what will speak, Fish's otherwise. Voices sit differently on this speaker, so the
+        two must not share what it has learned about each other. The server's address is normalized
+        so `http://host` and `http://host:80` are the one voice the memory already knows."""
+        if voice_server_available():
+            url = urllib.parse.urlsplit(config.TTS_SERVER_URL)
+            host, port = (url.hostname or "").lower(), url.port
+            default = (url.scheme == "http" and port == 80) or (url.scheme == "https" and port == 443)
+            netloc = host if default or port is None else f"{host}:{port}"
+            return f"server:{netloc}/{config.TTS_SERVER_VOICE}"
+        return f"{config.TTS_VOICE_ID}/{config.TTS_MODEL}"
 
     def process(self, pcm: bytes) -> bytes:
         """The chunk, leveled. Comes out _Lookahead.SAMPLES (3 ms) late; flush() at the end of a line."""
@@ -396,13 +530,33 @@ class _Lookahead:
         return out
 
 
-def _wav_to_pcm16k(wav_bytes: bytes) -> bytes:
-    """Any WAV → 16 kHz mono s16le, whatever rate/channels/width it came in."""
+def _resample_pcm(samples: np.ndarray, rate: int) -> bytes:
+    """16-bit mono samples at `rate` → the same at SAMPLE_RATE. Straight
+    interpolation: close enough that it measures 1.3% off ffmpeg's swresample
+    on a Qwen3-TTS reply, and scipy (and so a windowed sinc) isn't a dependency
+    this project has. It is not an anti-alias filter: with 24 → 16 kHz, energy
+    above 8 kHz folds back (white noise at 8.5-10 kHz comes out only ~3 dB
+    down — the sinc² null sits at the source rate), so the resample is clean
+    for voiced speech, which has nothing up there, and mildly dirty for
+    anything that doesn't."""
+    if rate == SAMPLE_RATE:
+        return samples.astype(np.int16).tobytes()
+    n_out = int(len(samples) * SAMPLE_RATE / rate)
+    x_old = np.linspace(0, 1, len(samples), endpoint=False)
+    x_new = np.linspace(0, 1, n_out, endpoint=False)
+    return np.interp(x_new, x_old, samples).astype(np.int16).tobytes()
+
+
+def _wav_to_pcm16k(wav_bytes: bytes, rate: int = 0) -> bytes:
+    """Any WAV → 16 kHz mono s16le, whatever rate/channels/width it came in.
+    `rate` is only for a headerless file read as WAV anyway (a server that says
+    WAV and sends 24 kHz PCM); 0 means the header says."""
     with wave.open(io.BytesIO(wav_bytes)) as w:
-        rate, channels, width = w.getframerate(), w.getnchannels(), w.getsampwidth()
+        channels, width = w.getnchannels(), w.getsampwidth()
         frames = w.readframes(w.getnframes())
+        rate = rate or w.getframerate()
     if width == 2:
-        samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768
+        samples = np.frombuffer(frames, dtype=np.int16)
     elif width == 1:
         samples = (np.frombuffer(frames, dtype=np.uint8).astype(np.float32) - 128) / 128
     elif width == 4:
@@ -410,13 +564,8 @@ def _wav_to_pcm16k(wav_bytes: bytes) -> bytes:
     else:
         raise ValueError(f"unsupported WAV sample width {width}")
     if channels > 1:
-        samples = samples.reshape(-1, channels).mean(axis=1)
-    if rate != SAMPLE_RATE:
-        n_out = int(len(samples) * SAMPLE_RATE / rate)
-        x_old = np.linspace(0, 1, len(samples), endpoint=False)
-        x_new = np.linspace(0, 1, n_out, endpoint=False)
-        samples = np.interp(x_new, x_old, samples).astype(np.float32)
-    return (np.clip(samples, -1, 1) * 32767).astype(np.int16).tobytes()
+        samples = samples.reshape(-1, channels).mean(axis=1).astype(np.float32)
+    return _resample_pcm(samples, rate)
 
 
 class NoBuiltinVoice(RuntimeError):
@@ -449,7 +598,8 @@ def _synthesize_builtin(text: str) -> bytes:
         elif shutil.which("espeak-ng") or shutil.which("espeak"):
             cmd = [shutil.which("espeak-ng") or "espeak", "--stdin", "-w", path]
         else:
-            raise NoBuiltinVoice("no built-in voice on this system (install espeak-ng, or set FISH_AUDIO_API_KEY)")
+            raise NoBuiltinVoice("no built-in voice on this system (install espeak-ng, or set "
+                                 "TTS_SERVER_URL or FISH_AUDIO_API_KEY)")
         subprocess.run(cmd, input=text.encode(), check=True, timeout=60)
         with open(path, "rb") as f:
             wav = f.read()
@@ -460,10 +610,14 @@ def _synthesize_builtin(text: str) -> bytes:
 
 def stream(text: str, leveler: Leveler | None = None) -> Iterator[bytes]:
     """Rocky's words as 16 kHz mono s16le PCM chunks, yielded as they're made.
-    Fish Audio when it's set up and reachable, else the computer's own voice
-    (all at once). Loudness is steadied by `leveler` (a fresh one if none is
-    given). A saved copy goes to debug/tts/ when DEBUG_SAVE_TTS is on."""
-    acting = config.TTS_ACTING
+    Your own speech server when its URL is set, else Fish Audio when it's set up
+    and reachable, else the computer's own voice (all at once). Loudness is
+    steadied by `leveler` (a fresh one if none is given). A saved copy goes to
+    debug/tts/ when DEBUG_SAVE_TTS is on."""
+    voice_server = voice_server_available()
+    # Cues only belong in the text a voice performs them with: Drama 3 acts [sighs] and
+    # <whisper>; a generic speech server reads them out.
+    acting = config.TTS_ACTING and not voice_server
     plain = clean_for_tts(without_cues(text))   # the built-in voice would read cues out
     text = clean_for_acting(text) if acting else plain
     if not text:
@@ -474,12 +628,17 @@ def stream(text: str, leveler: Leveler | None = None) -> Iterator[bytes]:
     try:
         chunks: Iterator[bytes] | None = None
         first = b""
-        if fish_available():
+        using = ""
+        for name, available, streamer in (("your speech server", voice_server_available, _server_stream),
+                                          ("fish audio", fish_available, _fish_stream)):
+            if not available() or chunks is not None:
+                continue
             try:
-                chunks = _fish_stream(text)
+                chunks = streamer(text)
                 first = next(chunks, b"")
+                using = name
             except Exception as e:  # network, auth, bad voice id... still speak
-                print(f"(fish audio failed, using the built-in voice: {e})")
+                print(f"({name} failed, using the built-in voice: {e})")
                 chunks = None
         if chunks is None:
             try:
@@ -498,7 +657,7 @@ def stream(text: str, leveler: Leveler | None = None) -> Iterator[bytes]:
                     parts.append(chunk)
                     yield chunk
             except Exception as e:  # dropped mid-stream: say what we have
-                print(f"(fish audio stream cut short: {e})")
+                print(f"({using} stream cut short: {e})")
         tail = leveler.flush()
         if tail:
             parts.append(tail)

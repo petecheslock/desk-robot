@@ -104,8 +104,9 @@ Nothing is billed while the robot is idle.
   - **OpenRouter** (the default): one key, any model, easy to switch.
   - **Anthropic**: use a Claude model directly.
   - **OpenAI**: use a GPT model directly.
-- Optionally a **Fish Audio** key for the cloned voice. Without it Rocky
-  speaks with your computer's built-in voice, which is fine for getting
+- Optionally a **Fish Audio** key for the cloned voice, or your own
+  [speech server](#change-the-voice) instead. Without either Rocky speaks
+  with your computer's built-in voice, which is fine for getting
   started.
 - Optionally an **OpenAI** key for [focus mode](#focus-mode), even if your
   language model is elsewhere. It costs about 3 cents a 25-minute session.
@@ -256,6 +257,8 @@ Open `server/.env` and fill in:
 - `ROBOT_TOKEN`: any random string. The robot will need the same one. Make
   one with `python3 -c "import secrets; print(secrets.token_hex(16))"`.
 - `FISH_AUDIO_API_KEY`: optional, for the cloned voice.
+- `TTS_SERVER_URL` and `TTS_SERVER_VOICE`: optional, your own [speech
+  server](#change-the-voice) used instead of Fish Audio.
 - `OPENAI_API_KEY`: optional, for [focus mode](#focus-mode).
 
 Then start the dashboard, from the `server` folder:
@@ -601,13 +604,28 @@ server cuts anything past it before it is spoken.
 
 ### Change the voice
 
-Rocky's voice is a community-uploaded fan clone on
+You can run your own speech server instead of Fish Audio: anything that
+speaks the OpenAI audio API (`POST /v1/audio/speech` with `{model, voice,
+input}`, `GET /v1/models`), on your LAN or tailnet. Set `TTS_SERVER_URL`
+(e.g. `http://host:8190`) and `TTS_SERVER_VOICE` (one of its voices; its
+`GET /v1/audio/voices` lists them) in `server/.env`, and it wins over Fish
+wherever it's set — the model id and the sample rate it answers at are read
+from the server itself on first use, and its audio is resampled to the
+robot's 16 kHz. No key: nothing is sent with the request, and the URL is
+plain http on purpose — these servers live on your LAN or tailnet, and the
+voice is unauthenticated by design (see
+[Privacy and security](#privacy-and-security)). If the server is down or
+misconfigured, each reply falls through to Fish Audio, then to this
+computer's voice.
+
+Otherwise Rocky's voice is a community-uploaded fan clone on
 [Fish Audio](https://fish.audio), not something this project owns. It may
 disappear one day, and it is for personal use. Open any voice's page there,
 copy the 32-character ID from the URL into `TTS_VOICE_ID` in `config.py`,
 and put your Fish key in `server/.env`.
 `TTS_TEMPERATURE` and `TTS_TOP_P` trade steadiness for expressiveness.
-Without a Fish key he uses the computer's built-in voice: on macOS,
+Without a Fish key or a speech server he uses the computer's built-in
+voice: on macOS,
 `TTS_FALLBACK_VOICE` picks one (`say -v ?` lists them); Windows uses its
 default voice; Linux uses `espeak-ng` if installed.
 
@@ -715,8 +733,10 @@ what Rocky is told he can do. A different screen driver goes near the top of
 - **"Brain has no key."** `LLM_API_KEY` is empty, or belongs to a different
   provider than `LLM_BASE_URL`.
 - **He answers in the computer's voice.** `FISH_AUDIO_API_KEY` is missing
-  or the voice ID is wrong. Fine for testing; set it when you want the real
-  voice.
+  or the voice ID is wrong. With `TTS_SERVER_URL` set: the server isn't
+  answering (check `GET /v1/models` on it), or `TTS_SERVER_VOICE` names a
+  voice it doesn't have (`GET /v1/audio/voices` lists them). Fine for
+  testing; set it when you want the real voice.
 - **"cannot speak: no built-in voice on this system."** Linux without
   `espeak-ng`. Install it, or set a Fish key.
 - **The voice rattles or sounds muffled.** Use the voice sliders under
@@ -739,7 +759,8 @@ what Rocky is told he can do. A different screen driver goes near the top of
   (`turn.py`) to decide when you have finished. `thinking.py` talks to the
   model, streams the reply sentence by sentence, and gives the model two
   tools: `look` (move the head, take a picture) and `track_face`.
-  `mouth.py` turns text into audio with Fish Audio and levels it for the
+  `mouth.py` turns text into audio with your own speech server or Fish
+  Audio and levels it for the
   small speaker. `tracker.py` follows faces with OpenCV. `perception.py`
   notices faces and a wave. `focus.py` runs focus sessions, asking OpenAI's
   Decisions API about the camera frame through `decisions.py`. `eyes.py` serves
@@ -790,7 +811,8 @@ cd server && python -m unittest tests/test_*.py
   conversation, your name from `HUMAN_NAME`, a camera picture and the
   face note (while he's awake; turn "A picture with every question"
   off in Settings > Vision to send pictures only for visual questions) to
-  your model provider, and each reply's text to Fish Audio if configured.
+  your model provider, and each reply's text to Fish Audio if configured
+  (a speech server of your own keeps that text on your own box).
   Speech-to-text, face tracking and perception run locally. The first run
   downloads speech and vision models from Hugging Face, GitHub and Google,
   pinned to fixed versions. The dashboard page loads nothing from
