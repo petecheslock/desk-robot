@@ -108,6 +108,9 @@ Nothing is billed while the robot is idle.
   [speech server](#change-the-voice) instead. Without either Rocky speaks
   with your computer's built-in voice, which is fine for getting
   started.
+- The robot is not needed to start: with the server alone, he listens and
+  talks through this computer, and can see through its camera too
+  (opt-in: [What Rocky sees](#what-rocky-sees)).
 - Optionally an **OpenAI** key for [focus mode](#focus-mode), even if your
   language model is elsewhere. It costs about 3 cents a 25-minute session.
 
@@ -262,6 +265,8 @@ Open `server/.env` and fill in:
 - `FISH_AUDIO_API_KEY`: optional, for the cloned voice.
 - `TTS_SERVER_URL` and `TTS_SERVER_VOICE`: optional, your own [speech
   server](#change-the-voice) used instead of Fish Audio.
+- `CAMERA_SOURCE`: optional, `mac` to let him see through this computer's
+  camera while the server runs alone ([What Rocky sees](#what-rocky-sees)).
 - `OPENAI_API_KEY`: optional, for [focus mode](#focus-mode).
 
 Then start the dashboard, from the `server` folder:
@@ -776,10 +781,12 @@ what Rocky is told he can do. A different screen driver goes near the top of
   model, streams the reply sentence by sentence, and gives the model two
   tools: `look` (move the head, take a picture) and `track_face`.
   `mouth.py` turns text into audio with your own speech server or Fish
-  Audio and levels it for the
-  small speaker. `tracker.py` follows faces with OpenCV. `perception.py`
-  notices faces and a wave. `focus.py` runs focus sessions, asking OpenAI's
-  Decisions API about the camera frame through `decisions.py`. `eyes.py` serves
+  Audio and levels it for the small speaker. `tracker.py` follows faces
+  with OpenCV. `perception.py` notices faces and a wave. With no robot
+  connected, Settings > Vision can run his eyes from this computer's
+  camera instead (`LocalCamera` in `eyes.py`, OpenCV). `focus.py` runs
+  focus sessions, asking OpenAI's Decisions API about the camera frame
+  through `decisions.py`. `eyes.py` serves
   the camera and the Live page. `settings.py` reads and writes
   `settings.json`. `main.py` ties it together.
 - **Launcher** (`server/launcher.py`): the dashboard on port 8766. It starts
@@ -843,7 +850,9 @@ cd server && python -m unittest tests/test_*.py
 - **Camera and microphone:** while the brain is connected the robot streams
   both to it, also while he sleeps on the clock (the camera at 5 frames a
   second, so a wave can wake him; the mic, so his name can). They stop when
-  the brain disconnects. There is no light that shows it.
+  the brain disconnects. There is no light that shows it. While it runs
+  alone, the computer's own microphone feeds him — and its camera too,
+  only if you turned on "He sees through" (nothing opens otherwise).
 - **What is stored:** the in-memory conversation and your dashboard
   settings (`server/settings.json`, and the clock part in the robot's
   flash). The dashboard's log lives in memory and is gone when the launcher
