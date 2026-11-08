@@ -1704,6 +1704,9 @@ async def main() -> None:
           f"dashboard on :8766 adds settings and a Start button)")
     if not os.environ.get("ROBOT_TOKEN"):
         print("WARNING: ROBOT_TOKEN is not set in server/.env — the robot will be refused")
+    if not mouth.voice_server_available() and config.TTS_SERVER_URL:
+        print("WARNING: TTS_SERVER_URL is set but TTS_SERVER_VOICE isn't — the speech server is skipped "
+              "(GET /v1/audio/voices on it lists its voices)")
     global tracker, brain, main_loop, perception, body, dancer
     apply_settings(settings.load())
     pick_camera_source()   # opens this computer's camera if the vision settings asked for it (off by default)

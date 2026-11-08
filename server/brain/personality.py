@@ -8,7 +8,7 @@ whenever a real exchange comes out sounding right. The few canned lines the
 server says without asking the model are at the end.
 """
 
-from . import config
+from . import config, mouth
 
 SYSTEM_PROMPT = f"""You are Rocky, the Eridian engineer from Project Hail Mary, \
 now living as a small desk robot on your human's \
@@ -119,7 +119,8 @@ LINES = {
 def _character_prompt(ch: dict) -> str:
     name, human = ch["name"], config.HUMAN_NAME
     acting = ""
-    if config.TTS_ACTING:
+    if config.TTS_ACTING and not mouth.voice_server_available():
+        # Only when the acting voice is the one that will speak: a speech server reads the cues out.
         acting = """
 - Your voice can act. Put a short direction in square brackets right before the words it changes, like \
 [sighs], [small laugh], [whispering] or [excited, talking fast], or wrap a few words in <whisper>...</whisper>, \
