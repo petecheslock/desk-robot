@@ -1,11 +1,10 @@
-"""Ears: listen on a microphone, cut the sound into turns, turn each one
-into text.
+"""Ears: cut the sound into turns, turn each one into text.
 
-Two possible microphones feed the same pipeline: the Mac's (sounddevice
-stream) or the robot's PDM mic, whose frames arrive over the WebSocket and
-are handed in through push_audio(). `source` picks which one is live.
+Audio arrives already pushed in through push_audio() — the robot's PDM mic
+frames over the WebSocket (and, while the robot is offline, the browser's
+mic from the dashboard). `source` says whose audio is live.
 
-Pipeline:  mic blocks → Segmenter (Silero VAD + Smart Turn, see turn.py) →
+Pipeline:  blocks → Segmenter (Silero VAD + Smart Turn, see turn.py) →
 Transcriber (faster-whisper, local, no cloud) → on_utterance(text, ...)
 
 Where a turn ends is decided the way people do it, not by a fixed silence:
@@ -16,7 +15,6 @@ you sound mid-thought he keeps listening.
 
 from __future__ import annotations
 
-import contextlib
 import queue
 import re
 import threading
@@ -30,8 +28,6 @@ from . import config
 from .turn import VAD_CHUNK, SileroVAD, SmartTurn
 
 SAMPLE_RATE = 16_000
-BLOCK_SECONDS = 0.03  # 30 ms per mic block
-BLOCK_SAMPLES = int(SAMPLE_RATE * BLOCK_SECONDS)
 CHUNK_SECONDS = VAD_CHUNK / SAMPLE_RATE  # 32 ms: the VAD's step
 
 
@@ -276,7 +272,7 @@ def _save_wav(audio: np.ndarray, path: str) -> None:
 
 
 class Ears:
-    """Owns the microphone stream and a worker thread. Calls
+    """Owns the audio queue and a worker thread. Calls
     on_utterance(text, started_at, ended_at) from the worker thread for every
     turn heard: started_at is when the person began talking, ended_at when
     their last word ended. on_speech_start() is called (same thread) once a
@@ -286,28 +282,22 @@ class Ears:
         self,
         on_utterance: Callable[[str, float, float], None],
         on_speech_start: Callable[[], None] | None = None,
-        device: int | str | None = None,
         on_turn_end: Callable[[], None] | None = None,
     ) -> None:
         self.on_utterance = on_utterance
         self.on_turn_end = on_turn_end      # the moment a turn ends, before it's transcribed
         self.transcribing = False           # a turn is being turned into text right now
-        self.device = device
-        self.device_name = "?"
-        self.mac_error: str | None = None  # why the Mac mic could not be opened, if it couldn't
-        self.device_missing: str | None = None  # the input asked for, when it isn't there (the default is open instead)
         self.muted = threading.Event()  # set while Rocky is talking (no echo cancel)
-        self.source = "mac"             # "mac" or "robot": whose audio is live
+        self.source = "robot"           # whose audio is live: "robot" or "browser"
         self.level = 0.0                # RMS of the latest live block (for `mic`)
         self._blocks: queue.Queue[np.ndarray | None] = queue.Queue()
-        self._stream = None
         self._worker: threading.Thread | None = None
         self._highpass = HighPass()
         self._segmenter = Segmenter(SileroVAD(), SmartTurn(), on_speech_start)
         self.transcriber = Transcriber()
 
     def set_source(self, source: str) -> None:
-        """Switch between the Mac mic and the robot mic."""
+        """Switch between the robot's mic and the browser's."""
         self.source = source
 
     @property
@@ -332,95 +322,23 @@ class Ears:
         """Speech has been going on for at least CANCEL_MIN_SPEECH."""
         return self._segmenter.talking
 
-    def push_audio(self, pcm16: bytes) -> None:
-        """Robot mic frame (16 kHz mono s16le) from the WebSocket."""
-        if self.source != "robot" or self.muted.is_set():
+    def push_audio(self, pcm16: bytes, source: str = "robot") -> None:
+        """A mic frame (16 kHz mono s16le) from the WebSocket — the robot's, or the browser's
+        while it stands in for the robot."""
+        if self.source != source or self.muted.is_set():
             return
         block = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32768.0
         block = self._highpass.process(block)
         self.level = float(np.sqrt(np.mean(block * block)))
         self._blocks.put(block)
 
-    def start(self) -> str:
-        """Start the worker and try to open the Mac mic. A missing Mac mic
-        (interface unplugged, wrong MIC_DEVICE) must not stop the robot's own
-        mic from working: it only means there is no Mac fallback, so the
-        failure is recorded in mac_error and start() still succeeds. If the
-        input asked for isn't there, the system default opens instead and
-        device_missing says which one was wanted."""
+    def start(self) -> None:
+        """Start the worker thread that listens to pushed audio."""
         self._worker = threading.Thread(target=self._run, daemon=True)
         self._worker.start()
-        self._open_wanted()
-        return self.device_name
-
-    def set_device(self, device: str | None) -> str:
-        """Switch to another input on this computer (None = the system default), live."""
-        self.device = device
-        self._close()
-        try:
-            import sounddevice as sd
-            sd._terminate()   # PortAudio lists the devices once, when it starts: look again, for one plugged in since
-            sd._initialize()
-        except Exception:
-            pass
-        self._open_wanted()
-        return self.device_name
-
-    def _open_wanted(self) -> None:
-        self.device_missing = None
-        if not self._open(self.device) and self.device is not None:
-            self.device_missing = str(self.device)
-            self._open(None)
-
-    def _open(self, device) -> bool:
-        stream = None
-        try:
-            import sounddevice as sd
-
-            # Open every input the device has (a USB interface often has two) and mix them,
-            # so it doesn't matter which jack the mic is plugged into.
-            channels = max(1, int(sd.query_devices(device, "input")["max_input_channels"]))
-            stream = sd.InputStream(
-                samplerate=SAMPLE_RATE,
-                channels=channels,
-                dtype="float32",
-                blocksize=BLOCK_SAMPLES,
-                device=device,
-                callback=self._on_audio,
-            )
-            stream.start()
-            name = sd.query_devices(stream.device)["name"]
-        except Exception as e:
-            if stream is not None:
-                with contextlib.suppress(Exception):
-                    stream.close()
-            if self._stream is None:
-                self.device_name = "no Mac mic"
-            self.mac_error = str(e)
-            return False
-        self._stream, self.device_name, self.mac_error = stream, name, None   # together: the status never sees half
-        return True
-
-    def _close(self) -> None:
-        if self._stream is not None:
-            with contextlib.suppress(Exception):
-                self._stream.stop()
-                self._stream.close()
-            self._stream = None
-
-    @property
-    def has_mac_mic(self) -> bool:
-        return self._stream is not None
 
     def stop(self) -> None:
-        self._close()
         self._blocks.put(None)
-
-    def _on_audio(self, indata, frames, time_info, status) -> None:
-        if self.source == "mac" and not self.muted.is_set():
-            block = np.clip(indata.sum(axis=1), -1.0, 1.0)
-            self.level = float(np.sqrt(np.mean(block * block)))
-            self._blocks.put(block)
 
     def _run(self) -> None:
         segmenter = self._segmenter

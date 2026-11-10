@@ -18,8 +18,6 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import computer
-
 PATH = Path(__file__).resolve().parent.parent / "settings.json"
 
 # Each setting: (default, kind, extra). kind: "bool", "int", "float", "str", "choice", "time"
@@ -30,11 +28,10 @@ SCHEMA: dict[str, dict[str, tuple]] = {
         "human_name":    ("", "str", 40),                 # empty = HUMAN_NAME from .env, else "friend" (restart)
         "awake_seconds": (60.0, "float", (10.0, 600.0)),  # how long he stays awake after you talk
         "volume":        (0.7, "float", (0.0, 1.0)),
-        "speaker_out":   ("robot", "choice", ("robot", "computer")),
-        # which mic he listens through: "auto" = the robot's while it's connected, else this computer's; "robot";
-        # "computer" = this computer's `mic_device` (by name; empty = MIC_DEVICE from .env, else the system default)
-        "mic":           ("auto", "choice", ("auto", "robot", "computer")),
-        "mic_device":    ("", "str", 120),
+        # which mic he listens through: "auto" = the robot's while it's connected, else this browser's
+        # when you start it on the Live view; "robot" = only ever the robot's; "browser" = this
+        # browser's whenever it's running (the robot's still wins while it's connected)
+        "mic":           ("auto", "choice", ("auto", "robot", "browser")),
         "camera_rotate": (270, "choice", (0, 90, 180, 270)),
         "body_language": (True, "bool", None),           # small head moves while he talks (body.py)
     },
@@ -56,12 +53,10 @@ SCHEMA: dict[str, dict[str, tuple]] = {
     "vision": {
         "every_question":   (True, "bool", None),        # a picture with every question while awake
         "snapshot":         ("xga", "choice", ("off", "svga", "xga", "uxga")),  # sharp still when he looks
-        # where pictures come from while no robot is connected: "robot" = none, "mac" = this computer's camera
-        # (a running robot's camera always wins). `camera_index` picks one by number; empty = the default.
-        # `camera_rotate` turns THIS computer's pictures only (its lens isn't on its side like the V2 head's).
-        "camera":           ("robot", "choice", ("robot", "mac")),
-        "camera_index":     ("", "str", 40),
-        "camera_rotate":    (0, "choice", (0, 90, 180, 270)),
+        # where pictures come from while no robot is connected: "browser" (the default) = this
+        # browser's webcam once you start it on the Live view; "robot" = no camera without the robot.
+        # A running robot's camera always wins either way.
+        "camera":           ("browser", "choice", ("robot", "browser")),
         "perception":       (True, "bool", None),        # local detectors: faces, and hands for a wave
         "gestures":         (True, "bool", None),        # a wave wakes him
         "stream":           ("vga", "choice", ("qvga", "vga")),   # the camera stream: 320x240 or 640x480
@@ -81,14 +76,6 @@ SCHEMA: dict[str, dict[str, tuple]] = {
         # what the screen shows while he sleeps: the clock, a game that plays itself (firmware idle_games.cpp), or
         # "roam": his face up and the head looking round the room (the clock at night)
         "idle_screen":   ("clock", "choice", ("clock", "pong", "tetris", "frogger", "roam")),
-    },
-    # What Rocky may do on this computer (brain/computer.py). Off until you switch it on; the choice is remembered.
-    "computer": {
-        "control":       (False, "bool", None),
-        "apps":          (computer.DEFAULT_APPS, "str", 1000),   # comma or line separated
-        "bookmarks":     ("", "str", 3000),               # "Name = https://..." per line
-        "shortcuts":     ("", "str", 1000),               # Apple Shortcuts he may run, comma or line separated
-        "confirm_shortcuts": (True, "bool", None),        # ask "Run X?" and wait for a yes first
     },
     # Listening and voice tuning (the dashboard's Advanced section); None = the default in config.py
     "listening": {
@@ -151,8 +138,6 @@ def clean_value(section: str, key: str, value):
             raise ValueError("a character id is lowercase letters, digits and dashes")
         if section == "face" and key == "pack" and not re.fullmatch(r"(custom/)?[a-z0-9][a-z0-9-]{0,39}", value):
             raise ValueError("a face pack id is lowercase letters, digits and dashes")
-        if section == "computer" and key == "bookmarks":
-            computer.parse_bookmarks(value)   # raises ValueError naming the bad line
         return value
     raise ValueError(f"{key}: unknown kind {kind}")
 

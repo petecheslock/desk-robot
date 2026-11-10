@@ -1,6 +1,6 @@
 """Turn-taking models: a real voice-activity detector and an end-of-turn judge.
 
-Both are small ONNX models that run on the Mac's CPU in a few milliseconds.
+Both are small ONNX models that run on the CPU in a few milliseconds.
 
 * Silero VAD v6 (MIT): says whether a 32 ms chunk contains speech. It replaces
   the old "louder than X" test, but mic level and noise still affect detection.

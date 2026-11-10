@@ -603,6 +603,13 @@
           <div class="readout"><span id="rpan">pan —</span><span id="rtilt">tilt —</span><span id="rtrack" class="off">not tracking</span></div>
           <div class="nocam">No picture yet.<br>The robot's camera streams once it connects.</div>
         </div>
+        <div class="card" style="margin-top:16px" id="avcard">
+          <h2 class="label"><span>While the robot is away</span><span class="sonar-state" id="avstate"></span></h2>
+          <button type="button" id="avbtn" style="width:100%">Use this browser as mic and camera</button>
+          <p class="hint" id="avhint">With the robot offline, this browser's microphone, webcam and speaker stand in
+            for it: press the button, allow the mic and camera, and talk to him from here. He answers through this
+            browser's speaker. When the robot connects it takes over, and this lets go until it leaves again.</p>
+        </div>
         <div class="card" style="margin-top:16px">
           <h2 class="label"><span><span data-robot-name>{name}</span> hears</span><span class="sonar-state" id="hearstate">—</span></h2>
           <div class="sonar"><canvas id="wave" aria-hidden="true"></canvas></div>
@@ -718,13 +725,9 @@
           <div class="set"><label class="check"><input type="checkbox" name="vision.every_question" aria-describedby="vqhint"> A picture with every question</label>
             <p class="hint" id="vqhint">While he's awake, so he knows what you're doing. Off = only when you ask what he sees. Either way the picture goes to the AI provider.</p></div>
           <fieldset class="set"><legend class="k">He sees through</legend>
-            <div class="choices"><label><input type="radio" name="vision.camera" value="robot"> The robot's camera (nothing while it's away)</label>
-              <label><input type="radio" name="vision.camera" value="mac"> This computer's camera, while the robot is away</label></div>
-            <p class="hint">A connected robot's camera always wins. This computer's needs Camera permission for the app that runs the server (macOS: System Settings &gt; Privacy &amp; Security &gt; Camera); it stays off unless you choose it.</p>
-            <div class="set"><label class="k" for="localrot">This computer's picture turned</label>
-              <select id="localrot" name="vision.camera_rotate"><option value="0">0° (as the camera sees)</option><option value="90">90° clockwise</option>
-                <option value="180">180°</option><option value="270">270° clockwise</option></select>
-              <p class="hint">Only for this computer's camera — if his description of the room is on its side, turn it here. The robot's own "Camera picture turned" setting doesn't touch it.</p></div></fieldset>
+            <div class="choices"><label><input type="radio" name="vision.camera" value="browser"> This browser's webcam, while the robot is away</label>
+              <label><input type="radio" name="vision.camera" value="robot"> The robot's camera only (nothing while it's away)</label></div>
+            <p class="hint">Start it on the Live view ("Use this browser as mic and camera"). A connected robot's camera always wins.</p></fieldset>
           <fieldset class="set"><legend class="k">When he looks</legend>
             <div class="choices"><label><input type="radio" name="vision.snapshot" value="uxga"> Sharpest (1600×1200)</label>
               <label><input type="radio" name="vision.snapshot" value="xga"> Sharp (1024×768)</label>
@@ -772,38 +775,15 @@
             <div class="slide"><input type="range" id="awake" name="rocky.awake_seconds" min="10" max="600" step="5"><output for="awake" data-unit=" s"></output></div></div>
           <div class="set"><label class="k" for="vol">Speaker volume</label>
             <div class="slide"><input type="range" id="vol" name="rocky.volume" min="0" max="1" step="0.05"><output for="vol" data-fixed="2"></output></div></div>
-          <fieldset class="set"><legend class="k">His voice plays on</legend>
-            <div class="choices"><label><input type="radio" name="rocky.speaker_out" value="robot"> The robot's speaker</label>
-              <label><input type="radio" name="rocky.speaker_out" value="computer"> This computer</label></div></fieldset>
-          <div class="set"><label class="k" for="micsel">He listens through</label>
-            <div class="row"><select id="micsel" aria-describedby="michint"><option value="auto">Automatic</option></select>
-              <button type="button" id="micscan">Look for mics</button></div>
-            <p class="hint" id="michint">Automatic = the robot's mic while it's connected, otherwise this computer's. A mic that's unplugged counts as Automatic until it's back.</p></div>
+          <fieldset class="set"><legend class="k">He listens through</legend>
+            <div class="choices"><label><input type="radio" name="rocky.mic" value="auto"> Automatic (the robot's mic, or this browser's on the Live view)</label>
+              <label><input type="radio" name="rocky.mic" value="browser"> This browser's, when it's running</label>
+              <label><input type="radio" name="rocky.mic" value="robot"> The robot's mic only</label></div></fieldset>
           <div class="set"><label class="k" for="rot">Camera picture turned</label>
             <select id="rot" name="rocky.camera_rotate"><option value="0">0°</option><option value="90">90° clockwise</option>
               <option value="180">180°</option><option value="270">270° clockwise (V2 head)</option></select></div>
           <div class="set"><label class="check"><input type="checkbox" name="rocky.body_language" aria-describedby="bodyhint"> Body language</label>
             <p class="hint" id="bodyhint">Small head moves that go with how he feels while he talks, and a glance up while he thinks. He keeps still while asleep, while following your face, and while he takes a picture.</p></div>
-        </fieldset>
-
-        <fieldset class="card">
-          <legend class="label"><span>Computer</span><span class="saved" data-saved="computer"></span></legend>
-          <div class="set"><label class="check"><input type="checkbox" name="computer.control" aria-describedby="pchint pcplatform"> Let <span data-robot-name>{name}</span> use my computer</label>
-            <p class="hint" id="pchint">He can search the web, open websites and the apps below, play or pause music, change the volume and run the Shortcuts you pick. He can't type, click, log in or buy anything. Anyone talking near him can ask too, so switch it off when that matters.</p>
-            <p class="hint" id="pcplatform">Apps, music, volume and Shortcuts work on a Mac only. On Windows or Linux he can search the web and open websites.</p></div>
-          <div class="set"><label class="k" for="pcapps">Apps he may open</label>
-            <textarea id="pcapps" name="computer.apps" rows="2" maxlength="1000" spellcheck="false" aria-describedby="pcappshint"></textarea>
-            <p class="hint" id="pcappshint">Names as they appear in Applications, separated by commas.</p></div>
-          <div class="set"><label class="k" for="pcbm">Bookmarks</label>
-            <textarea id="pcbm" name="computer.bookmarks" rows="3" maxlength="3000" spellcheck="false" placeholder="My GitHub = https://github.com/me" aria-describedby="pcbmhint"></textarea>
-            <p class="hint" id="pcbmhint">One per line: a name, then = and the address. He already knows Google, Amazon, YouTube, Maps, Wikipedia, GitHub, eBay, Reddit and Gmail.</p></div>
-          <div class="set"><label class="k" for="pcsc">Shortcuts he may run</label>
-            <textarea id="pcsc" name="computer.shortcuts" rows="2" maxlength="1000" spellcheck="false" placeholder="none yet"></textarea>
-            <div class="row"><button type="button" id="pclist">Pick from my Shortcuts</button></div>
-            <ul class="results" id="pcshortcuts" aria-live="polite"></ul>
-            <label class="check"><input type="checkbox" name="computer.confirm_shortcuts"> Ask me before running a shortcut</label></div>
-          <div class="set"><span class="k">Spotify</span>
-            <p class="hint" id="spotifynote" style="margin:0">—</p></div>
         </fieldset>
       </div>
     </form>
@@ -848,14 +828,9 @@
                 <input type="text" id="c-name" maxlength="24" autocomplete="off" spellcheck="false" placeholder="Juniper" aria-describedby="c-namehint">
                 <p class="hint" id="c-namehint">Also the wake word: “hey <span id="c-nameecho">…</span>”.</p></div>
               <div class="set"><label class="k" for="c-voice">Voice</label>
-                <div class="row"><input type="text" id="c-voice" autocomplete="off" spellcheck="false" placeholder="Fish Audio voice ID, or the voice's address" aria-describedby="c-voicehint">
+                <div class="row"><input type="text" id="c-voice" maxlength="120" autocomplete="off" spellcheck="false" placeholder="Voice name on your speech server" aria-describedby="c-voicehint">
                   <button type="button" id="c-test">Test voice</button></div>
-                <p class="hint" id="c-voicehint">Open a voice on <a href="https://fish.audio/discovery/" target="_blank" rel="noopener">fish.audio</a> and copy the long ID from its address, or paste the whole address. Test voice plays a sample here on this computer.</p></div>
-              <fieldset class="set"><legend class="k">Voice model</legend>
-                <div class="choices"><label><input type="radio" name="c-model" value="drama-3"> Drama 3 (acts: sighs, laughs, whispers)</label>
-                  <label><input type="radio" name="c-model" value=""> S2.1 Pro (standard: steady, natural reading)</label></div>
-                <p class="hint">Drama 3 performs short directions the personality writes into its replies, like [small laugh] or &lt;whisper&gt;…&lt;/whisper&gt;. S2.1 Pro is Fish's standard model, the one Rocky uses: a calm, consistent read of the words with no acting directions.</p>
-                <p class="hint">Cost (Fish Audio's API, per million bytes of text, about 12 hours of speech): <b>Drama 3</b> $50, on sale for $10 until Nov 12, 2026, so about $7.50 per thousand replies ($1.50 on sale). <b>S2.1 Pro</b> $15, about $2.25 per thousand replies. A reply is about 150 bytes.</p></fieldset>
+                <p class="hint" id="c-voicehint">The name of one of your speech server's voices (its <code>GET /v1/audio/voices</code> lists them). Empty = the one named by <code>TTS_SERVER_VOICE</code> in <code>server/.env</code>. Test voice plays a sample here.</p></div>
               <div class="set"><label class="k" for="c-desc">Describe the personality</label>
                 <textarea id="c-desc" rows="4" maxlength="1000" placeholder="A dramatic old sea captain who's suspicious of technology and tells too many stories about the sea."></textarea>
                 <div class="row"><button type="button" class="primary" id="c-draft">Write it for me</button></div>
@@ -1388,8 +1363,16 @@ const FaceKit = (() => {
   const history = [];
 
   // ── helpers ────────────────────────────────────────────────────────────
+  // The console token, injected by the server that served this page ("" when it doesn't use one).
+  // Kept in memory only: the page was opened with ?token=, and everything after that carries it
+  // as a header (the camera stream, an <img>, keeps it in its URL).
+  const TOKEN = {console_token};
+  const tokenHeaders = () => TOKEN ? { "X-Rocky-Console-Token": TOKEN } : {};
+  async function fget(url) {
+    return fetch(url, { headers: tokenHeaders() });
+  }
   async function post(path, body) {
-    const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Rocky-Console": "1" }, body: JSON.stringify(body || {}) });
+    const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Rocky-Console": "1", ...tokenHeaders() }, body: JSON.stringify(body || {}) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || r.statusText);
     return j;
@@ -1467,7 +1450,7 @@ const FaceKit = (() => {
   $("restartbtn").onclick = $("restartbtn2").onclick = () => { $("restartnote").hidden = true; serverAction("restart"); };
   async function pollServer() {
     try {
-      const r = await fetch("/launcher/state");
+      const r = await fget("/launcher/state");
       if (!r.ok) throw new Error("no launcher");
       const s = await r.json();
       server = { launcher: true, running: s.running || s.external, external: s.external, uptime: s.uptime_s };
@@ -1492,7 +1475,7 @@ const FaceKit = (() => {
   let streaming = false;
   function updateStream() {
     const want = server.running && liveTab();
-    if (want && !streaming) { $("cam").src = "/stream?" + Date.now(); streaming = true; }
+    if (want && !streaming) { $("cam").src = "/stream?" + (TOKEN ? "token=" + encodeURIComponent(TOKEN) + "&" : "") + Date.now(); streaming = true; }
     if (!want && streaming) { $("cam").removeAttribute("src"); streaming = false; }
   }
   $("cam").addEventListener("error", () => { streaming = false; setTimeout(updateStream, 2000); });
@@ -1513,7 +1496,7 @@ const FaceKit = (() => {
     faceButtons(EMOTIONS);
   }
   async function loadLivePack() {
-    try { const r = await fetch("/launcher/faces"); if (r.ok) useLivePack(await r.json()); } catch {}
+    try { const r = await fget("/launcher/faces"); if (r.ok) useLivePack(await r.json()); } catch {}
   }
   function faceButtons(list) {
     EMOTIONS = list; $("faces").innerHTML = ""; live.tiles.clear();
@@ -1547,16 +1530,17 @@ const FaceKit = (() => {
   // ── the conversation, word by word: his words appear as his voice says them (status.speech gives his sentences
   //    and where each sits in the audio; the words of a sentence are spread over it by their length), yours type
   //    out once he has understood you ──
-  const words = { speech: null, at: 0, heard: null, heardAt: 0, typed: true, said: "", shown: { heard: null, said: null } };
+  const words = { speech: null, at: 0, heard: "", heardAt: 0, typed: true, said: "", shown: { heard: null, said: null }, primed: false };
   const TYPE_MS = 60;   // per word, typing out what you said
   function takeWords(s) {
     words.speech = s.speech || null; words.at = performance.now(); words.said = s.last_said || "";
     if ((s.last_heard || "") !== words.heard) {
-      words.typed = words.heard === null;   // on first load it's old news: no typing
+      words.typed = !words.primed;   // on first load it's old news: no typing
       words.heard = s.last_heard || ""; words.heardAt = performance.now();
+      words.primed = true;
     }
   }
-  const split = t => t.split(/\s+/).filter(Boolean);
+  const split = t => String(t || "").split(/\s+/).filter(Boolean);
   function upto(text, frac) {   // the words of `text` reached `frac` of the way through saying it
     const ws = split(text), total = text.length || 1;
     let used = 0, n = 0;
@@ -1710,31 +1694,28 @@ const FaceKit = (() => {
   async function tick() {
     if (server.running) {
       try {
-        const r = await fetch("/status");
+        const r = await fget("/status");
         if (r.ok) render(await r.json()); else showOffline();
       } catch { showOffline(); }
     }
     setTimeout(tick, server.running && liveTab() && !document.hidden ? 200 : 1500);
   }
-  let pcSeen;   // the last computer action already shown (undefined until the first status)
   function render(s) {
     status = s;
-    const pc = s.computer?.last;
-    if (pc && pcSeen !== undefined && pc[1] !== pcSeen) toast(`${NAME} on your computer: ${pc[0]}`);
-    pcSeen = pc ? pc[1] : null;
     renderFocus(s.focus);
     const linked = !!s.robot, fresh = s.frame_age_s != null && s.frame_age_s < 3;
     $("link").textContent = linked ? "on WiFi" : "not connected"; $("link").className = "v" + (linked ? " good" : " warn");
-    $("fps").textContent = fresh ? s.fps + " fps" + (s.camera === "mac" ? " · this computer" : "") : "no signal";
+    $("fps").textContent = fresh ? s.fps + " fps" : "no signal";
     $("fps").className = "v" + (fresh ? "" : " warn");
     $("temp").textContent = s.temperature_c != null ? s.temperature_c.toFixed(1) + " °C" : "—";
     $("temp").className = "v" + (s.temperature_c > 75 ? " warn" : "");
     $("state").textContent = s.speaking ? "speaking" : s.thinking ? "thinking" : s.awake ? "awake" : "asleep";
     $("mic").textContent = !s.listening ? "off" : s.mic === "robot" ? "robot mic"
-      : (s.mic_device || "computer mic") + (s.mic_missing ? ` (${s.mic_missing} unplugged)` : "");
+      : s.mic === "browser" ? "this browser" + (s.browser?.mic ? ` (${s.browser.mic})` : "") : s.mic ? `${s.mic} mic` : "—";
     $("awakenote").textContent = s.awake ? "dozes off in " + Math.max(0, Math.round(s.awake_for)) + " s" : "asleep · say hey " + NAME;
     $("viewport").classList.toggle("dark", !fresh); $("viewport").classList.toggle("speaking", !!s.speaking);
     $("framenote").textContent = fresh ? "" : "no fresh frame";
+    $("hudfps").textContent = fresh ? s.fps + " fps" + (s.camera === "browser" ? " · this browser" : "") : "";
     const pan = s.pan ?? 0, tilt = s.tilt ?? 0;
     $("rpan").textContent = "pan " + Math.round(pan) + "°"; $("rtilt").textContent = "tilt " + Math.round(tilt) + "°";
     $("rtrack").textContent = s.tracking ? "face locked" : s.tracking_enabled ? "looking for a face" : s.head_held ? "holding" : "not tracking";
@@ -1770,9 +1751,255 @@ const FaceKit = (() => {
       : s.hearing ? "hearing you" : "listening";
     hs.className = "sonar-state" + (s.speaking ? " astro" : s.hearing && !focusing ? " hot" : "");
     renderNotices(s.notices);
+    avRender(s);
     if (liveTab()) drawWave();
   }
   tick();
+
+  // ── browser A/V: this browser stands in for the robot while it's away ───
+  // One console WebSocket to the brain's robot port (hello_console + CONSOLE_TOKEN): the mic goes up
+  // as \x01+16 kHz PCM exactly like the robot's, the voice comes back the same way, and the webcam's
+  // JPEGs are POSTed to /api/browser_frame. The robot's A/V always wins: it sends `av_taken` and the
+  // devices are let go (a fresh user gesture is needed to take them back, so no prompt loops).
+  // Chrome only: mic → AudioWorklet (downsamples to 16 kHz) → WebSocket, the robot's own framing.
+  // Bump when changing capture: the first log line must show this or the tab is still on old JS.
+  const AV_BUILD = "2026-11-10d-chrome-only";
+  const av = { ws: null, stream: null, actx: null, node: null, micSrc: null, nextPlay: 0,
+               camTimer: null, worklet: false, devices: false, warned: false, sent: 0 };
+  const avLog = (...a) => console.log("[browser-av]", ...a);
+  function avTrackInfo(stream) {
+    return (stream ? stream.getTracks() : []).map(t => ({
+      kind: t.kind, label: t.label, enabled: t.enabled, muted: t.muted,
+      readyState: t.readyState, id: t.id.slice(0, 8),
+    }));
+  }
+  // 48 kHz float → 16 kHz s16le, in 100 ms frames (the robot's own mic framing). The read position
+  // is carried across blocks as an exact fraction of a sample, so the output rate stays 16.000 kHz
+  // (a block-rounded position drifts ~1%, chipmunking the voice slowly).
+  const WORKLET = `class MicSender extends AudioWorkletProcessor {
+    constructor() { super(); this.ratio = sampleRate / 16000; this.buf = new Float32Array(0); this.pos = 0;
+                    this.out = new Float32Array(1600); this.n = 0; this.ticks = 0; this.empty = 0; this.peak = 0; }
+    process(inputs) {
+      this.ticks++;
+      const ch = inputs[0] && inputs[0][0];
+      if (!ch) {
+        this.empty++;
+        if (this.ticks === 1 || this.ticks % 500 === 0)
+          this.port.postMessage({ type: "stats", ticks: this.ticks, empty: this.empty, peak: this.peak, hasInput: false });
+        return true;
+      }
+      let peak = 0;
+      for (let i = 0; i < ch.length; i++) { const a = Math.abs(ch[i]); if (a > peak) peak = a; }
+      if (peak > this.peak) this.peak = peak;
+      if (this.ticks === 1 || this.ticks % 500 === 0)
+        this.port.postMessage({ type: "stats", ticks: this.ticks, empty: this.empty, peak: this.peak, blockPeak: peak, hasInput: true });
+      const b = new Float32Array(this.buf.length + ch.length);
+      b.set(this.buf); b.set(ch, this.buf.length); this.buf = b;
+      while (this.pos + 1 < this.buf.length && this.n < this.out.length) {
+        const i = this.pos | 0, f = this.pos - i;
+        this.out[this.n++] = this.buf[i] * (1 - f) + this.buf[i + 1] * f;
+        this.pos += this.ratio;
+      }
+      if (this.n >= this.out.length) {
+        const pcm = new Int16Array(this.out.length);
+        for (let k = 0; k < this.out.length; k++) { const v = Math.max(-1, Math.min(1, this.out[k])); pcm[k] = v < 0 ? v * 32768 : v * 32767; }
+        this.port.postMessage(pcm.buffer, [pcm.buffer]);
+        this.n = 0;
+      }
+      const used = Math.min(Math.floor(this.pos), Math.max(0, this.buf.length - 1));  // keep the sample at pos: interp needs it
+      this.buf = this.buf.slice(used);
+      this.pos -= used;
+      return true;
+    }
+  }
+  registerProcessor("mic-sender", MicSender);`;
+
+  function avPlay(pcm) {   // ArrayBuffer, 16 kHz s16le: scheduled on a small jitter buffer
+    if (!av.actx || !av.devices) return;
+    if (av.actx.state === "suspended") {   // e.g. the tab was backgrounded: audio waits for a click
+      if (!av.warned) { av.warned = true; toast("Click \"Use this browser as mic and camera\" to enable audio", true); }
+      return;
+    }
+    const i16 = new Int16Array(pcm), f32 = new Float32Array(i16.length);
+    for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
+    const buf = av.actx.createBuffer(1, f32.length, 16000);
+    buf.copyToChannel(f32, 0);
+    if (av.nextPlay < av.actx.currentTime + 0.01) av.nextPlay = av.actx.currentTime + 0.06;   // underrun: nudge it forward
+    const src = av.actx.createBufferSource();
+    src.buffer = buf; src.connect(av.actx.destination); src.start(av.nextPlay);
+    av.nextPlay += buf.duration;
+  }
+
+  function avLetGo() {   // the robot took over (or the button was pressed): free the mic and camera
+    avLog("let go", { sent: av.sent });
+    if (av.stream) { for (const t of av.stream.getTracks()) t.stop(); av.stream = null; }
+    avStopAudio();
+    if (av.camTimer) { clearInterval(av.camTimer); av.camTimer = null; }
+    av.devices = false;
+    av.warned = false;
+    av.sent = 0;
+  }
+
+  function avStopAudio() {   // the mic capture only: the camera keeps running
+    if (av.node) { try { av.node.disconnect(); } catch {} av.node = null; }
+    if (av.micSrc) { try { av.micSrc.disconnect(); } catch {} av.micSrc = null; }
+  }
+
+  function sendMic(pcm) {   // ArrayBuffer of 16 kHz s16le, framed like the robot's mic
+    if (!(av.ws && av.ws.readyState === 1 && av.devices)) return;
+    const f = new Uint8Array(1 + pcm.byteLength);
+    f[0] = 1; f.set(new Uint8Array(pcm), 1);
+    av.ws.send(f);
+    av.sent++;
+    if (av.sent === 1 || av.sent % 20 === 0)
+      avLog("sent mic frame", { n: av.sent, bytes: pcm.byteLength });
+  }
+
+  async function avCaptureWorklet() {
+    if (!av.worklet) {
+      await av.actx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" })));
+      av.worklet = true;
+      avLog("worklet module loaded");
+    }
+    avStopAudio();
+    avLog("capture via AudioWorklet", { sampleRate: av.actx.sampleRate, state: av.actx.state });
+    const node = new AudioWorkletNode(av.actx, "mic-sender", {
+      numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1], channelCount: 1,
+    });
+    node.port.onmessage = ev => {
+      if (ev.data && ev.data.type === "stats") {
+        avLog("worklet stats", ev.data);
+        return;
+      }
+      sendMic(ev.data);
+    };
+    av.micSrc = av.actx.createMediaStreamSource(new MediaStream(av.stream.getAudioTracks()));
+    av.micSrc.connect(node);
+    // Pull the graph so the worklet's process() runs; it writes no audible output of its own.
+    node.connect(av.actx.destination);
+    av.node = node;
+  }
+
+  function avConnect() {
+    return new Promise((resolve, reject) => {
+      if (location.protocol === "https:" && location.hostname !== "localhost")
+        return reject(new Error("browser A/V needs the tunnel to carry the brain's port 8765 (ws://) — see the README"));
+      const ws = new WebSocket(`ws://${location.hostname}:8765`);
+      let ok = false;
+      ws.onopen = () => ws.send(JSON.stringify({ type: "hello_console", token: TOKEN }));
+      ws.onmessage = ev => {
+        if (typeof ev.data !== "string") {   // \x01 + 16 kHz PCM: Rocky's voice, on the jitter buffer
+          if (ev.data instanceof ArrayBuffer && new Uint8Array(ev.data)[0] === 1) avPlay(ev.data.slice(1));
+          return;
+        }
+        const m = JSON.parse(ev.data);
+        if (m.type === "console_ok") { ok = true; resolve(ws); }
+        if (m.type === "av_taken") { avLetGo(); toast("The robot's mic and camera took over"); avRender(status); }
+      };
+      ws.onclose = () => { if (av.ws === ws) { av.ws = null; avLetGo(); avRender(status); } if (!ok) reject(new Error("the brain refused this browser (check CONSOLE_TOKEN)")); };
+      ws.onerror = () => { if (!ok) reject(new Error("couldn't reach the brain's port 8765")); };
+      av.ws = ws;
+      ws.binaryType = "arraybuffer";
+    });
+  }
+
+  async function avStart() {
+    const btn = $("avbtn");
+    btn.disabled = true;
+    try {
+      avLog("start", { build: AV_BUILD, ua: navigator.userAgent, href: location.href, secure: location.protocol === "https:" });
+      if (!av.ws || av.ws.readyState > 1) {
+        avLog("connecting console WebSocket…");
+        await avConnect();
+        avLog("console WebSocket ready", { readyState: av.ws.readyState });
+      }
+      if (!av.actx) av.actx = new AudioContext();
+      await av.actx.resume();   // belt: unlocked by the click that got here (see avbtn.onclick)
+      avLog("AudioContext", { state: av.actx.state, sampleRate: av.actx.sampleRate });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: { width: 640, height: 480 },
+      });
+      avLog("getUserMedia ok", avTrackInfo(stream));
+      av.stream = stream; av.devices = true; av.sent = 0;
+      const video = document.createElement("video");
+      video.muted = true; video.volume = 0; video.playsInline = true;
+      video.srcObject = new MediaStream(stream.getVideoTracks());   // video-only: element mute stays element-local
+      await video.play();
+      await avCaptureWorklet();
+      const canvas = document.createElement("canvas");
+      canvas.width = 640; canvas.height = 480;
+      const c2d = canvas.getContext("2d");
+      av.camTimer = setInterval(() => {
+        if (!av.stream || !av.ws || document.hidden) return;
+        c2d.drawImage(video, 0, 0, 640, 480);
+        canvas.toBlob(b => {
+          if (b) fetch("/api/browser_frame", { method: "POST",
+            headers: { ...tokenHeaders(), "X-Rocky-Console": "1", "Content-Type": "image/jpeg" }, body: b }).catch(() => {});
+        }, "image/jpeg", 0.85);
+      }, 200);   // ~5 pictures a second, like the robot's stream
+      av.ws.send(JSON.stringify({ type: "av_state", mic: stream.getAudioTracks()[0]?.label || "",
+                                  camera: stream.getVideoTracks()[0]?.label || "" }));
+      toast("This browser is the mic and camera now — say hey " + NAME);
+      // 2.6 s in, say what's wrong if the mic still isn't flowing.
+      setTimeout(() => {
+        if (!av.devices) return;
+        avLog("health", { actx: av.actx.state, sent: av.sent, ws: av.ws && av.ws.readyState });
+        if (av.actx.state !== "running")
+          toast("Audio is blocked by the browser — click the button once more", true);
+        else if (av.sent === 0)
+          toast("The mic isn't reaching the page — check the microphone in the address bar's camera controls", true);
+      }, 2600);
+    } catch (e) {
+      avLog("start failed", e);
+      toast(e.message, true);
+      if (!av.devices) avLetGo();
+    }
+    avRender(status);
+  }
+
+  window.__rockyAv = av;   // DevTools: live A/V state
+
+  function avStop() {
+    if (av.ws) { try { av.ws.close(); } catch {} av.ws = null; }
+    avLetGo();
+    avRender(status);
+  }
+
+  $("avbtn").onclick = () => {
+    // Audio that was suspended (the tab was backgrounded): the click re-enables it, session unchanged
+    if (av.devices && av.actx && av.actx.state === "suspended") {
+      av.actx.resume().catch(() => {});
+      av.warned = false;
+      return;
+    }
+    if (av.devices) return avStop();
+    // The AudioContext must be born inside the click itself: browsers unlock audio only while the
+    // user activation lasts, and avStart's first await would outlive it (a suspended context plays
+    // nothing). Created here, resumed here, it stays running for the replies.
+    if (!av.actx) av.actx = new AudioContext();
+    av.actx.resume().catch(() => {});
+    avStart();
+  };
+
+  function avRender(s) {
+    const btn = $("avbtn"), st = $("avstate");
+    if (!btn) return;
+    const robot = !!s?.robot, session = !!(av.ws && av.ws.readyState === 1);
+    btn.disabled = !server.running || (robot && !av.devices);
+    btn.textContent = av.devices ? "Stop using this browser"
+      : robot ? "The robot's mic and camera are in use"
+      : "Use this browser as mic and camera";
+    // "standing in · mic 10/s": the frame rate the server sees arriving from this browser's mic.
+    // "audio blocked" = the browser won't run the audio graph; "mic 0/s" with frames sent = they're
+    // being lost on the way; nothing at all = the mic isn't captured.
+    const audio = av.actx && av.actx.state !== "running" ? "audio blocked" : null;
+    st.textContent = robot ? "robot online"
+      : av.devices ? `standing in · ${audio || `mic ${s?.browser ? s.browser.mic_fps : "?"}/s`}`
+      : session ? "connected" : "";
+    st.className = "sonar-state" + (av.devices ? " hot" : "");
+    $("avcard").hidden = !server.running;
+  }
 
   // ── settings ───────────────────────────────────────────────────────────
   const form = $("settingsform");
@@ -1803,56 +2030,18 @@ const FaceKit = (() => {
       else if (document.activeElement !== el) el.value = v ?? "";
       if (el.type === "range") { showOutput(el); paintRange(el); }
     }
-    fillMic(s);
     const w = s.weather;
     $("here").textContent = w.lat != null ? (w.location || `${w.lat.toFixed(2)}, ${w.lon.toFixed(2)}`) : "not set: no weather on the clock";
     $("placeclear").hidden = w.lat == null;
   }
-  // the mic picker: Automatic, the robot's, or one of this computer's inputs by name (listed by the launcher)
-  let mics = [], micsError = "";
-  const micValue = r => r.mic === "computer" ? "dev:" + (r.mic_device || "") : r.mic;
-  function fillMic(s) {
-    const sel = $("micsel"), r = s.rocky, want = micValue(r);
-    const opts = [["auto", "Automatic"], ["robot", "The robot's mic"]];
-    const def = mics.find(m => m.default);
-    opts.push(["dev:", "This computer's default" + (def ? ` (${def.name})` : "")]);
-    for (const m of mics) opts.push(["dev:" + m.name, m.name]);
-    if (want.startsWith("dev:") && want !== "dev:" && !mics.some(m => "dev:" + m.name === want))
-      opts.push([want, `${want.slice(4)} (not plugged in)`]);
-    sel.replaceChildren(...opts.map(([v, t]) => new Option(t, v)));
-    sel.value = want;
-    $("michint").textContent = micsError ? `Couldn't list this computer's mics: ${micsError}`
-      : "Automatic = the robot's mic while it's connected, otherwise this computer's. A mic that's unplugged counts as Automatic until it's back.";
-  }
-  async function loadMics() {
-    try {
-      const j = await (await fetch("/launcher/mics")).json();
-      mics = j.mics || []; micsError = j.error || "";
-    } catch { mics = []; micsError = "the launcher didn't answer"; }
-    if (cfg?.settings) fillMic(cfg.settings);
-  }
-  $("micsel").onchange = ev => {
-    const v = ev.target.value;
-    save({ rocky: v.startsWith("dev:") ? { mic: "computer", mic_device: v.slice(4) } : { mic: v, mic_device: "" } }, "rocky");
-  };
-  $("micscan").onclick = () => loadMics().then(() => toast(mics.length ? `Found ${mics.length} mic${mics.length > 1 ? "s" : ""} on this computer` : "No mics found on this computer"));
 
   async function loadSettings() {
     try {
-      const r = await fetch("/launcher/settings");
+      const r = await fget("/launcher/settings");
       if (!r.ok) throw new Error();
       cfg = await r.json();
       $("comptz").textContent = cfg.computer_timezone;
-      $("spotifynote").textContent = cfg.spotify_key
-        ? "Key found: he can find a song, artist, album or playlist and play it, and tell you what's playing."
-        : "He can tell you what's playing and play, pause or skip. To play songs by name, add a Spotify key to server/.env (SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET; the README shows how) and restart the server. Until then he opens Spotify's search for you to pick.";
-      if (cfg.mac === false) {
-        $("pcplatform").textContent = "This computer isn't a Mac, so here he can only search the web and open websites. Apps, music, volume and Shortcuts need a Mac for now; docs/computer-control-windows.md in the project folder has ideas for adding them on Windows.";
-        $("pcplatform").classList.add("warn");
-        $("spotifynote").textContent = "Spotify and Apple Music control need a Mac for now.";
-      }
       fill(cfg.settings);
-      loadMics();
     } catch { /* not served by the launcher: the notice says so */ }
   }
   function valueOf(el) {
@@ -1898,7 +2087,7 @@ const FaceKit = (() => {
     if (!q) return;
     list.innerHTML = '<li class="hint">Searching…</li>';
     try {
-      const r = await fetch("/launcher/geocode?q=" + encodeURIComponent(q)), j = await r.json();
+      const r = await fget("/launcher/geocode?q=" + encodeURIComponent(q)), j = await r.json();
       if (!r.ok) throw new Error(j.error || "search failed");
       list.innerHTML = "";
       if (!j.results.length) { list.innerHTML = '<li class="hint">No places found. Try another spelling.</li>'; return; }
@@ -1921,31 +2110,6 @@ const FaceKit = (() => {
   $("placego").onclick = searchPlaces;
   $("placeq").addEventListener("keydown", ev => { if (ev.key === "Enter" && !ev.isComposing) { ev.preventDefault(); searchPlaces(); } });
   $("placeclear").onclick = () => save({ weather: { location: "", lat: null, lon: null } }, "weather");
-
-  // computer: pick Shortcuts he may run from the ones on this Mac
-  $("pclist").onclick = async () => {
-    const list = $("pcshortcuts");
-    list.innerHTML = '<li class="hint">Looking…</li>';
-    try {
-      const r = await fetch("/launcher/shortcuts"), j = await r.json();
-      if (!r.ok) throw new Error(j.error || "couldn't list your shortcuts");
-      const have = new Set(($("pcsc").value || "").split(/[,\n]/).map(n => n.trim().toLowerCase()).filter(Boolean));
-      const left = j.shortcuts.filter(n => !have.has(n.toLowerCase()));
-      list.innerHTML = "";
-      if (!left.length) { list.innerHTML = `<li class="hint">${j.error || (j.shortcuts.length ? "All of them are on the list." : "No shortcuts yet: make one in the Shortcuts app.")}</li>`; return; }
-      for (const n of left) {
-        const li = document.createElement("li"), b = document.createElement("button");
-        b.type = "button"; b.textContent = "+ " + n;
-        b.onclick = () => {
-          const now = ($("pcsc").value || "").trim();
-          $("pcsc").value = now ? `${now}, ${n}` : n;
-          li.remove();
-          save({ computer: { shortcuts: $("pcsc").value } }, "computer");
-        };
-        li.appendChild(b); list.appendChild(li);
-      }
-    } catch (e) { list.innerHTML = ""; toast(e.message, true); }
-  };
 
   // ── faces ──────────────────────────────────────────────────────────────
   const FIELDS = [
@@ -2001,7 +2165,7 @@ const FaceKit = (() => {
 
   async function loadFaces(selectId) {
     try {
-      const r = await fetch("/launcher/faces");
+      const r = await fget("/launcher/faces");
       if (!r.ok) throw new Error();
       const j = await r.json();
       fstate.list = j.packs.filter(p => p.pack); fstate.active = j.active; fstate.emotions = j.emotions; fstate.fxNames = j.fx;
@@ -2253,10 +2417,9 @@ const FaceKit = (() => {
   const cstate = { list: [], active: "rocky", sel: "rocky", isNew: false, saved: null, dirty: false, external: false };
   const charOf = id => cstate.list.find(c => c.id === id);
   const LINE_KEYS = ["wake", "sleep", "track_on", "track_off"];
-  const MODEL_NAMES = { "": "S2.1 Pro", "drama-3": "Drama 3" };
   async function loadChars(selectId) {
     try {
-      const r = await fetch("/launcher/characters");
+      const r = await fget("/launcher/characters");
       if (!r.ok) throw new Error();
       const j = await r.json();
       cstate.list = j.characters.filter(c => c.character); cstate.active = j.active; cstate.external = j.external;
@@ -2274,7 +2437,8 @@ const FaceKit = (() => {
       b.setAttribute("aria-pressed", !cstate.isNew && c.id === cstate.sel);
       const name = document.createElement("span"); name.className = "pname"; name.textContent = c.character.name;
       const tags = document.createElement("span"); tags.className = "ptags";
-      tags.textContent = [c.id === cstate.active ? "In use" : "", c.builtin ? "Built-in" : "Yours", MODEL_NAMES[c.character.tts_model] || ""].filter(Boolean).join(" · ");
+      tags.textContent = [c.id === cstate.active ? "In use" : "", c.builtin ? "Built-in" : "Yours",
+                          c.character.voice ? `voice: ${c.character.voice}` : ""].filter(Boolean).join(" · ");
       if (c.id === cstate.active) tags.classList.add("on");
       b.append(name, tags);
       b.onclick = () => selectChar(c.id);
@@ -2297,7 +2461,7 @@ const FaceKit = (() => {
     markCharDirty(false);
   }
   function blankChar() {
-    return { name: "", description: "", voice_id: "", tts_model: "drama-3", prompt: "", examples: "",
+    return { name: "", description: "", voice: "", prompt: "", examples: "",
              lines: { wake: "", sleep: "", track_on: "", track_off: "" }, wake_words: [] };
   }
   function newChar() {
@@ -2310,8 +2474,7 @@ const FaceKit = (() => {
   }
   function fillCharForm(ch) {
     cstate.saved = JSON.parse(JSON.stringify(ch));
-    $("c-name").value = ch.name; $("c-voice").value = ch.voice_id; $("c-desc").value = ch.description || "";
-    for (const r of document.getElementsByName("c-model")) r.checked = r.value === (ch.tts_model || "");
+    $("c-name").value = ch.name; $("c-voice").value = ch.voice || ""; $("c-desc").value = ch.description || "";
     $("c-prompt").value = ch.prompt; $("c-examples").value = ch.examples || "";
     for (const k of LINE_KEYS) $("c-l-" + k).value = ch.lines?.[k] || "";
     $("c-wake").value = (ch.wake_words || []).join("\n");
@@ -2319,8 +2482,7 @@ const FaceKit = (() => {
     nameEcho();
   }
   function charFromForm() {
-    const model = [...document.getElementsByName("c-model")].find(r => r.checked)?.value ?? "";
-    return { name: $("c-name").value.trim(), description: $("c-desc").value.trim(), voice_id: $("c-voice").value.trim(), tts_model: model,
+    return { name: $("c-name").value.trim(), description: $("c-desc").value.trim(), voice: $("c-voice").value.trim(),
              prompt: $("c-prompt").value.trim(), examples: $("c-examples").value.trim(),
              lines: Object.fromEntries(LINE_KEYS.map(k => [k, $("c-l-" + k).value.trim()])),
              wake_words: $("c-wake").value.split("\n").map(w => w.trim()).filter(Boolean) };
@@ -2412,7 +2574,7 @@ const FaceKit = (() => {
     if ((ch.prompt || ch.examples) && !confirm("Replace what's written on the right with a new draft?")) return;
     b.disabled = true; b.textContent = "Writing…";
     try {
-      const j = await post("/launcher/characters/draft", { name: ch.name, description: ch.description, tts_model: ch.tts_model });
+      const j = await post("/launcher/characters/draft", { name: ch.name, description: ch.description });
       const d = j.draft;
       $("c-prompt").value = d.prompt; $("c-examples").value = d.examples;
       for (const k of LINE_KEYS) $("c-l-" + k).value = d.lines[k] || "";
@@ -2428,8 +2590,8 @@ const FaceKit = (() => {
     const text = first || `Hi! I'm ${ch.name || "your new robot"}. This is how I sound.`;
     b.disabled = true; b.textContent = "Loading…";
     try {
-      const r = await fetch("/launcher/characters/voice", { method: "POST", headers: { "Content-Type": "application/json", "X-Rocky-Console": "1" },
-                                                           body: JSON.stringify({ voice_id: ch.voice_id, tts_model: ch.tts_model, text }) });
+      const r = await fetch("/launcher/characters/voice", { method: "POST", headers: { "Content-Type": "application/json", "X-Rocky-Console": "1", ...tokenHeaders() },
+                                                           body: JSON.stringify({ voice: ch.voice, text }) });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
       if (sample) { sample.pause(); URL.revokeObjectURL(sample.src); }
       sample = new Audio(URL.createObjectURL(await r.blob()));
@@ -2447,7 +2609,7 @@ const FaceKit = (() => {
   async function pollLog() {
     if (server.launcher) {
       try {
-        const j = await (await fetch("/launcher/log?after=" + logSeq)).json();
+        const j = await (await fget("/launcher/log?after=" + logSeq)).json();
         if (j.seq < logSeq) { logEl.textContent = ""; }        // the launcher restarted
         logSeq = j.seq;
         const frag = document.createDocumentFragment();
