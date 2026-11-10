@@ -10,9 +10,9 @@ Rocky has two real abilities the model can call (tool use): `look` moves
 the head and comes back with a fresh camera frame from the new angle, and
 `track_face` starts/stops following the human. main.py supplies the
 functions that actually do those things, plus more tools that change while
-running (the computer abilities in computer.py, offered as `extra_tools()`).
-Abilities in `quick` that succeed after he has said his line end the reply
-there: no second call to the model just to say "done".
+running (focus mode, offered as `extra_tools()`). Actions whose result
+says so end the reply after he has said his line: no second call to the
+model just to say "done".
 """
 
 from __future__ import annotations
@@ -415,39 +415,12 @@ class RobotBrain:
             return buf, True
         if "]" in lead:
             m = _EMOTION_TAG.match(lead)
-            if m:
-                candidate = m.group(1).lower()
-                if candidate in config.EMOTIONS:
-                    self.emotion = candidate
-                    return _EMOTION_TAG.sub("", lead, count=1), True
-                if not config.TTS_ACTING:
-                    return _EMOTION_TAG.sub("", lead, count=1), True
-            if config.TTS_ACTING:
-                return self._take_acting_lead(lead, final)
-            return buf, True
+            if m and m.group(1).lower() in config.EMOTIONS:
+                self.emotion = m.group(1).lower()
+            return _EMOTION_TAG.sub("", lead, count=1), True   # an emotion tag sets the face; any other is dropped
         if final or len(lead) > 24:
             return buf, True  # a "[" with no "]" in sight: not a tag
         return buf, False
-
-    def _take_acting_lead(self, lead: str, final: bool) -> tuple[str, bool]:
-        """A voice that acts (config.TTS_ACTING): the model sometimes puts a direction where the emotion tag goes.
-        "[excited, talking fast] Hah!" -> excited + "[talking fast] Hah!"; "[sighs] [sad] Oh." -> sad + "[sighs] Oh."
-        Anything else stays as written, for the voice to perform."""
-        m = re.match(r"\[([^\[\]]*)\]\s*", lead)
-        if not m:
-            return lead, True
-        first, _, rest = m.group(1).partition(",")
-        if first.strip().lower() in config.EMOTIONS:
-            self.emotion = first.strip().lower()
-            return (f"[{rest.strip()}] " if rest.strip() else "") + lead[m.end():], True
-        after = lead[m.end():]
-        if not after or (after.startswith("[") and "]" not in after):
-            return lead, final or len(lead) > 80      # the emotion tag may be next: wait for it
-        m2 = _EMOTION_TAG.match(after)
-        if m2 and m2.group(1).lower() in config.EMOTIONS:
-            self.emotion = m2.group(1).lower()
-            return lead[:m.end()] + after[m2.end():], True
-        return lead, True
 
     def _strip_images(self) -> None:
         """Replace old camera frames with a note. Keeping every image in the
