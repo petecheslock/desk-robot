@@ -44,9 +44,14 @@ See [Make it your own](#make-it-your-own).
 └───────────────────────────┬───────────────────────────────────┘
                             │ WiFi (WebSocket)
 ┌───────────────────────────┴───────────────────────────────────┐
-│  brain server (Python, on your computer)                      │
+│  brain server (Python, on your server, in rootless podman)    │
 │  wake word → speech-to-text → language model → text-to-speech │
 │  plus face tracking, emotions, and head movements             │
+└───────────────────────────┬───────────────────────────────────┘
+                            │ tunnel (ssh / Tailscale)
+┌───────────────────────────┴───────────────────────────────────┐
+│  the dashboard in your browser: mic, webcam and speaker stand │
+│  in for the robot while it is offline                          │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -60,13 +65,15 @@ Nothing is billed while the robot is idle.
 2. [Build the body](#build-the-body)
 3. [Flash the firmware and test over USB](#flash-the-firmware-and-test-over-usb)
 4. [Set up the brain on your computer](#set-up-the-brain-on-your-computer)
-5. [Connect the robot to the brain](#connect-the-robot-to-the-brain)
-6. [Living with Rocky](#living-with-rocky)
-7. [Make it your own](#make-it-your-own)
-8. [Troubleshooting](#troubleshooting)
-9. [How it works](#how-it-works)
-10. [Privacy and security](#privacy-and-security)
-11. [Credits and license](#credits-and-license)
+5. [Run the brain in a container](#run-the-brain-in-a-container)
+6. [Reach the dashboard from another machine (the tunnel)](#reach-the-dashboard-from-another-machine-the-tunnel)
+7. [Connect the robot to the brain](#connect-the-robot-to-the-brain)
+8. [Living with Rocky](#living-with-rocky)
+9. [Make it your own](#make-it-your-own)
+10. [Troubleshooting](#troubleshooting)
+11. [How it works](#how-it-works)
+12. [Privacy and security](#privacy-and-security)
+13. [Credits and license](#credits-and-license)
 
 ## What you need
 
@@ -91,26 +98,26 @@ Nothing is billed while the robot is idle.
 | 5 V, 2 A or better USB-C power supply | A laptop port is fine for flashing, not for running servos and speaker. |
 | 4 rubber bumpers, 10 x 3 mm (optional) | In the recesses under the base, so he stays put on the desk. |
 
-**On the computer side.**
+**On the server side.**
 
-- A Mac, Windows PC, or Linux machine on the same WiFi as the robot. It was
-  built and tested on an Apple Silicon Mac. Windows and Linux use the same
-  code except for the built-in fallback voice and speaker playback, which
-  have their own paths that nobody has run yet. If you're the first, say how
-  it went. On Linux, install `espeak-ng` for the fallback voice.
+- A Linux box on the same WiFi as the robot, running the brain as a
+  [rootless container](#run-the-brain-in-a-container) (podman 4.9+). For
+  development, a Mac or Windows machine works too — see
+  [Set up the brain on your computer](#set-up-the-brain-on-your-computer).
 - Python 3.13, which is what this was built and tested with.
 - PlatformIO for flashing the firmware (installed below).
 - A language-model API key. Any one of these works:
   - **OpenRouter** (the default): one key, any model, easy to switch.
   - **Anthropic**: use a Claude model directly.
   - **OpenAI**: use a GPT model directly.
-- Optionally a **Fish Audio** key for the cloned voice, or your own
-  [speech server](#change-the-voice) instead. Without either Rocky speaks
-  with your computer's built-in voice, which is fine for getting
-  started.
-- The robot is not needed to start: with the server alone, he listens and
-  talks through this computer, and can see through its camera too
-  (opt-in: [What Rocky sees](#what-rocky-sees)).
+  - Or any OpenAI-compatible endpoint you run yourself (`LLM_BASE_URL`).
+- Optionally your own [speech server](#change-the-voice) for the voice.
+  Without one Rocky speaks with the built-in fallback voice
+  (`espeak-ng` in the container), which is fine for getting started.
+- The robot is not needed to start: with the server alone, he listens,
+  sees and talks through the dashboard's browser — open it through
+  [the tunnel](#reach-the-dashboard-from-another-machine-the-tunnel)
+  and press "Use this browser as mic and camera".
 - Optionally an **OpenAI** key for [focus mode](#focus-mode), even if your
   language model is elsewhere. It costs about 3 cents a 25-minute session.
 
@@ -241,11 +248,9 @@ is useful whenever you want to test the body alone.
 
 ## Set up the brain on your computer
 
-The brain works without the robot: it uses your computer's microphone and
-speaker until the robot connects. It can see through your computer's camera
-too while the robot is away — opt in with Settings > Vision
-("He sees through: this computer's camera") or `CAMERA_SOURCE=mac` in
-`server/.env`; a connected robot's camera always wins. Get it talking first.
+The brain works without the robot: the dashboard's browser stands in with
+its own microphone, webcam and speaker while the robot is away (opt in on
+the Live tab; a connected robot's A/V always wins). Get it talking first.
 
 ```bash
 cd server
@@ -262,12 +267,13 @@ Open `server/.env` and fill in:
 - `HUMAN_NAME`: what Rocky should call you.
 - `ROBOT_TOKEN`: any random string. The robot will need the same one. Make
   one with `python3 -c "import secrets; print(secrets.token_hex(16))"`.
-- `FISH_AUDIO_API_KEY`: optional, for the cloned voice.
 - `TTS_SERVER_URL` and `TTS_SERVER_VOICE`: optional, your own [speech
-  server](#change-the-voice) used instead of Fish Audio.
-- `CAMERA_SOURCE`: optional, `mac` to let him see through this computer's
-  camera while the server runs alone ([What Rocky sees](#what-rocky-sees)).
+  server](#change-the-voice) — Rocky's voice.
 - `OPENAI_API_KEY`: optional, for [focus mode](#focus-mode).
+
+For local development, also set `LIVE_VIEW_BIND=127.0.0.1` in
+`server/.env` (the fork's default binds all interfaces for the
+container): with a loopback-only bind the console needs no token.
 
 Then start the dashboard, from the `server` folder:
 
@@ -287,20 +293,16 @@ while the brain is stopped.)
 
 The first run downloads about 160 MB of speech models into `~/.cache`
 (Whisper from Hugging Face, the two turn-detection models from GitHub and
-Hugging Face, all pinned to a fixed version). macOS will ask once to let
-your terminal use the microphone; on Windows, check that microphone access
-for desktop apps is on in Privacy settings. Say **"hey Rocky, what is a
-weekend?"** and he should answer through your computer's speaker. You can
+Hugging Face, all pinned to a fixed version). Say **"hey Rocky, what is a
+weekend?"** into the browser mic (Live tab, "Use this browser as mic and
+camera") and he should answer through your speakers. You can
 also type `ask what is a weekend?` into the server console (the dashboard's
 Log tab has one).
 
-To have the dashboard there whenever you log in, run
-`server/install_launcher.sh` once (macOS; `--uninstall` removes it, and
-`--start-brain` also starts the brain with it).
-
 ### The dashboard
 
-<http://localhost:8766/> has five tabs, and only answers this computer:
+<http://localhost:8766/> has five tabs (opened through the tunnel with
+`?token=<CONSOLE_TOKEN>` on a server):
 
 - **Live**: what Rocky sees and hears, the last exchange, and buttons for
   his head, face, sleep, words to say, and a focus session. **Start server**, **Restart** and
@@ -330,17 +332,86 @@ To have the dashboard there whenever you log in, run
 The brain also serves the Live part on <http://localhost:8767/> by itself,
 without settings or server buttons.
 
+### Reach the dashboard from another machine (the tunnel)
+
+The intended setup runs the brain on a remote Linux box
+(see [Run the brain in a container](#run-the-brain-in-a-container)); the
+dashboard is reached from your own machine through a Tailscale or ssh
+tunnel, and one shared `CONSOLE_TOKEN` in `server/.env` gates it — the page,
+the camera, the controls, everything. Open it as
+`http://localhost:8766/?token=<CONSOLE_TOKEN>`; the page keeps the token in
+memory for the requests that follow.
+
+With an ssh tunnel:
+
+```bash
+ssh -L 8766:localhost:8766 -L 8767:localhost:8767 -L 8765:localhost:8765 <host>
+```
+
+8766 is the dashboard, 8767 the brain's own live view, and 8765 the robot
+port — the browser's stand-in mic and speaker (the Live view's "Use this
+browser as mic and camera") connect to it as a second WebSocket, gated by
+the same `CONSOLE_TOKEN`.
+
+With Tailscale, `tailscale serve` can do the same on the tailnet. The
+tunnel provides the privacy (plain http is fine — and needed: `getUserMedia`
+for the browser mic/camera only works in a secure context, which
+`http://localhost` counts as); `CONSOLE_TOKEN` is the gate.
+`PUBLIC_HOST` in `server/.env` can additionally pin the Host header the
+console answers to.
+
+## Run the brain in a container
+
+On the server (any Linux box with podman 4.9+ / Quadlet), the brain runs
+rootless as a systemd user service. Nothing in the container can touch the
+host beyond two named volumes and one settings file — future robot actions
+come through APIs/MCP, not host control.
+
+```bash
+git clone https://github.com/<you>/desk-robot && cd desk-robot
+podman build -t desk-robot -f deploy/Containerfile .   # ~5 min
+
+mkdir -p ~/.config/containers/systemd ~/.config/desk-robot
+cp deploy/desk-robot.container ~/.config/containers/systemd/
+cp server/.env.example ~/.config/desk-robot/.env       # then fill it in
+touch ~/.config/desk-robot/settings.json               # the dashboard's settings
+systemctl --user daemon-reload
+systemctl --user start desk-robot.service
+journalctl --user -u desk-robot -f                     # the brain's console
+```
+
+`deploy/desk-robot.container` publishes the robot's port 8765 on the LAN
+(`ROBOT_TOKEN` gates it) and the console ports 8766/8767 on loopback only —
+reach them through the [tunnel](#reach-the-dashboard-from-another-machine-the-tunnel)
+with `CONSOLE_TOKEN`. Personalities, face packs and the model cache live in
+named volumes, so they survive image rebuilds.
+
+The first start downloads about 200 MB of models (the speech model's commit
+is pinned in `brain/config.py`, `STT_REVISION`) into the cache volume — it
+takes a few minutes, once. On a slow link you can instead pre-bake them:
+build the image on a machine that has them in `~/.cache`, or add the
+downloads to the Containerfile before the `USER rocky` line.
+
+Then point the robot at the server: `BRAIN_HOST` in
+`firmware/include/secrets.h` is the server's LAN IP, `ROBOT_TOKEN` the same
+string as `~/.config/desk-robot/.env`. The protocol is unchanged — an
+existing robot only needs that one line edited and a re-flash.
+
+The brain's stdin console stays available in the container for the raw
+console commands: `podman exec -it desk-robot python -m brain.main` runs a
+second one alongside (or read the launcher's output with `journalctl`).
+
 ## Connect the robot to the brain
 
-1. Find your computer's address on your WiFi:
+1. Find the brain box's address on your WiFi:
 
    ```bash
+   hostname -I                # Linux
    ipconfig getifaddr en0     # macOS
    ipconfig                   # Windows: the IPv4 address of your WiFi adapter
-   hostname -I                # Linux
    ```
 
-   Your router can usually pin the computer to a fixed address so this does
+   Your router can usually pin the box to a fixed address so this does
    not change.
 
 2. Copy `firmware/include/secrets.h.example` to `secrets.h` in the same
@@ -352,9 +423,9 @@ without settings or server buttons.
    `wifi: connected` and then `brain: connected` once the server is running.
 
 From then on the server listens through the robot's microphone and speaks
-through the robot's speaker whenever the robot is connected, and falls back
-to your computer when it is not. The robot can now live on a wall supply
-away from the computer.
+through the robot's speaker whenever the robot is connected, and the
+dashboard's browser stands in while it is not. The robot can now live on a
+wall supply anywhere the WiFi reaches.
 
 ## Living with Rocky
 
@@ -429,12 +500,11 @@ The dashboard's Live tab shows what they notice (with boxes on the camera
 view), and Settings > Vision turns them on or off. The models (about 12 MB)
 download on the first start, pinned and checksummed.
 
-Running the server on its own? Settings > Vision can point him at this
-computer's camera ("He sees through: this computer's camera", or
-`CAMERA_SOURCE=mac` in `server/.env`): the same stream, snapshots and
-detectors run from this computer until the robot connects, and switch back by
-themselves. macOS asks once for Camera permission for the app that runs the
-server. Without it, or without the option, he honestly says he can't see.
+Running the server without the robot? The dashboard's browser stands in
+(Live tab, "Use this browser as mic and camera"): your webcam becomes his
+camera — the same stream and detectors run from it until the robot
+connects, and switch back by themselves. The browser asks once for camera
+and microphone access. Without it, he honestly says he can't see.
 
 ### The clock screen
 
@@ -467,48 +537,12 @@ longer, because that is where the tilt servo can rest quietly.
 
 ### Let him use your computer
 
-Off until you switch it on in Settings > Computer ("Let Rocky use my
-computer"); the dashboard remembers your choice. Then:
-
-- **"Look up an Arduino on Amazon"**: searches Google, Google Images,
-  Amazon, YouTube, Maps, Wikipedia, GitHub, eBay or Reddit.
-- **"Open YouTube"**: those sites, Gmail, and bookmarks you add.
-- **"Open Spotify"**: apps on the list in the same card.
-- **"Play Mr. Blue Sky"**, **"put on some Daft Punk"**: finds a song,
-  artist, album or playlist on Spotify and plays it (needs a Spotify key,
-  below). **"What's playing?"**, **"pause"**, **"next song"** work without one,
-  in Spotify or Apple Music.
-- **"Turn the volume down"**: this computer's sound (not on an audio
-  interface, whose volume macOS can't set).
-- **"Run Lights off"**: Apple Shortcuts you pick from the list. He asks
-  first, and runs it after you say yes.
-
-Searches and sites work on any computer. Apps, music, volume and Shortcuts
-need a Mac for now (on Windows or Linux the server doesn't offer them to
-him). [docs/computer-control-windows.md](docs/computer-control-windows.md) has
-ideas for adding them on Windows.
-
-He can't type, click, log in or buy anything, and every address and
-command is built by the server from those lists, never by the model. At
-most 3 actions per question and 8 a minute. Each one shows up on the
-dashboard and in the log. Opening a page costs no extra AI call, so it's as
-fast and cheap as a normal answer. The first music command makes macOS
-ask whether the server may control Spotify or Music: allow it.
-
-**Spotify key** (for playing by name; Spotify only gives these to Premium
-accounts):
-
-1. Sign in at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
-   and click **Create app**. Any name and description; Redirect URI
-   `http://127.0.0.1:8766/`; tick **Web API**; save.
-2. Open the app's **Settings** and copy the **Client ID** and **Client
-   secret** into `server/.env` as `SPOTIFY_CLIENT_ID` and
-   `SPOTIFY_CLIENT_SECRET`. Outside the US, set `SPOTIFY_MARKET` to your
-   two-letter country code.
-3. Restart the server (**Restart** in the dashboard's header). Settings >
-   Computer says "Key found".
-
-Without a key he opens Spotify's search for you to pick from.
+Not in this fork. The upstream project let Rocky search the web, open apps
+and bookmarks, play music, change the volume and run Shortcuts on the
+computer the server ran on; this fork runs the brain headless on a server,
+so all of that is deleted (brain/computer.py, the Settings > Computer card,
+and the Mac/Windows docs for it). Future robot actions come through
+APIs/MCP servers instead — a deliberate boundary, not a missing feature.
 
 ### Focus mode
 
@@ -564,16 +598,10 @@ touching code. Press **New personality**, then:
 
 1. Give it a name. The name is also the wake word ("hey Juniper"), so two
    or three syllables that aren't an everyday word work best.
-2. Pick a voice on [Fish Audio](https://fish.audio) and paste its ID (or
-   the whole address of its page). **Test voice** plays a sample on this
-   computer.
-3. Pick the voice model. **Drama 3** acts: the personality can sigh, laugh
-   or whisper, and Drama 3 performs those directions instead of reading
-   them out. **S2.1 Pro** is Fish's standard model, the one Rocky uses: a
-   steady, natural read with no acting directions. On Fish's API, Drama 3
-   costs $50 per million bytes of text ($10 on launch sale until November
-   12, 2026) and S2.1 Pro $15: about $7.50 and $2.25 per thousand replies.
-4. Describe the personality in a sentence or two and press **Write it for
+2. Type the name of a voice on your speech server (its
+   `GET /v1/audio/voices` lists them; empty uses `TTS_SERVER_VOICE` from
+   `server/.env`). **Test voice** plays a sample in the browser.
+3. Describe the personality in a sentence or two and press **Write it for
    me**. Your language model writes the personality, example replies, the
    few lines said without thinking, and the ways speech-to-text tends to
    mishear the name. Edit anything, then **Save and use**.
@@ -586,10 +614,8 @@ wake words; the robot's rules (short spoken replies, honesty about the
 camera, the head, the face) are added for every personality.
 
 A personality's text tells the language model how to behave, so read one
-from someone else before you use it, the way you would a script. With
-**Let Rocky use my computer** on, it could ask him to open sites or apps
-from your lists; Shortcuts still need you to answer yes to "Run <name>?",
-said out loud by name.
+from someone else before you use it, the way you would a script: it decides
+what he says, and what he says he can do.
 
 ### Rename the robot
 
@@ -619,30 +645,23 @@ server cuts anything past it before it is spoken.
 
 ### Change the voice
 
-You can run your own speech server instead of Fish Audio: anything that
-speaks the OpenAI audio API (`POST /v1/audio/speech` with `{model, voice,
-input}`, `GET /v1/models`), on your LAN or tailnet. Set `TTS_SERVER_URL`
-(e.g. `http://host:8190`) and `TTS_SERVER_VOICE` (one of its voices; its
-`GET /v1/audio/voices` lists them) in `server/.env`, and it wins over Fish
-wherever it's set — the model id and the sample rate it answers at are read
-from the server itself on first use, and its audio is resampled to the
-robot's 16 kHz. No key: nothing is sent with the request, and the URL is
-plain http on purpose — these servers live on your LAN or tailnet, and the
-voice is unauthenticated by design (see
+Rocky's voice comes from your own speech server: anything that speaks the
+OpenAI audio API (`POST /v1/audio/speech` with `{model, voice, input}`,
+`GET /v1/models`), on your LAN or tailnet. Set `TTS_SERVER_URL` (e.g.
+`http://host:8190`) and `TTS_SERVER_VOICE` (one of its voices; its
+`GET /v1/audio/voices` lists them) in `server/.env`. The model id and the
+sample rate it answers at are read from the server itself on first use, and
+its audio is resampled to the robot's 16 kHz. No key: nothing is sent with
+the request, and the URL is plain http on purpose — these servers live on
+your LAN or tailnet, and the voice is unauthenticated by design (see
 [Privacy and security](#privacy-and-security)). If the server is down or
-misconfigured, each reply falls through to Fish Audio, then to this
-computer's voice.
+misconfigured, each reply falls through to the built-in voice.
+`TTS_TEMPERATURE` and `TTS_TOP_P` trade steadiness for expressiveness (a
+server is free to ignore them).
 
-Otherwise Rocky's voice is a community-uploaded fan clone on
-[Fish Audio](https://fish.audio), not something this project owns. It may
-disappear one day, and it is for personal use. Open any voice's page there,
-copy the 32-character ID from the URL into `TTS_VOICE_ID` in `config.py`,
-and put your Fish key in `server/.env`.
-`TTS_TEMPERATURE` and `TTS_TOP_P` trade steadiness for expressiveness.
-Without a Fish key or a speech server he uses the computer's built-in
-voice: on macOS,
-`TTS_FALLBACK_VOICE` picks one (`say -v ?` lists them); Windows uses its
-default voice; Linux uses `espeak-ng` if installed.
+Without a speech server he uses the built-in voice: `espeak-ng` in the
+container (`TTS_FALLBACK_VOICE` in `config.py` can name one of its voices;
+`espeak-ng --voices` lists them).
 
 The robot's speaker is tiny, so a deep voice turns into rattle. Four knobs
 in `config.py` shape the audio before it reaches the speaker: `TTS_LEVEL`
@@ -688,10 +707,12 @@ Also in `config.py`: `VAD_THRESHOLD` (how loud counts as speech),
 are done, and how long he will wait), `AWAKE_SECONDS` (how long he stays
 awake after you speak), `STT_MODEL` (`base.en` is fast; `small.en` hears
 better and takes about a second longer). The dashboard has sliders for the
-listening knobs and how long he stays awake, and a "He listens through" choice
-(Automatic, the robot's mic, or any input on this computer by name); changes
-apply immediately and are saved in `server/settings.json`, which overrides
-`config.py`. A chosen mic that's unplugged counts as Automatic until it's back.
+listening knobs and how long he stays awake, and a "He listens through"
+choice (Automatic — the robot's mic, or the browser's when it stands in —
+the robot's only, or the browser's); changes apply immediately and are
+saved in `server/settings.json`, which overrides `config.py`. A browser
+mic's echo cancellation and AGC differ from the robot's mic, so
+`VAD_THRESHOLD` may want a nudge when you switch between them.
 
 ### Change the face
 
@@ -740,26 +761,25 @@ what Rocky is told he can do. A different screen driver goes near the top of
   and `secrets.h`. The server console shows the refusal. If it never gets
   to `brain: connected`, the computer's address changed or the server is
   not running.
-- **He never hears you on the computer.** On macOS, check System Settings,
-  Privacy & Security, Microphone for your terminal; on Windows, the
-  microphone privacy setting for desktop apps. Run `mic` in the server console
-  for a level meter. If you have several inputs, pick one under "He listens
-  through" in the dashboard's settings.
-- **He says he can't see, running the server alone.** The computer's camera
-  is off by default: turn it on under "He sees through" in Settings > Vision
-  (or `CAMERA_SOURCE=mac` in `server/.env`). If the server console reports a
-  camera error, allow Camera access for the app that runs the server
-  (macOS: System Settings, Privacy & Security, Camera) — it retries by
-  itself. `camera on` / `camera off` in the server console switch it too.
+- **He never hears you through the browser.** The Live view's status line
+  shows the browser mic's frame rate ("standing in · mic 10/s"): 0/s with
+  the camera working means the browser isn't sending audio — check the
+  microphone in the address bar's camera controls, and make sure the page
+  is at `http://localhost…` (getUserMedia needs a secure context). Run
+  `mic` in the server console for a level meter on the server's side.
+- **He says he can't see, running the server alone.** Start the browser's
+  camera (Live view, "Use this browser as mic and camera") — a robot away
+  means no camera until a browser stands in (Settings > Vision can also
+  pin "The robot's camera only").
 - **"Brain has no key."** `LLM_API_KEY` is empty, or belongs to a different
   provider than `LLM_BASE_URL`.
-- **He answers in the computer's voice.** `FISH_AUDIO_API_KEY` is missing
-  or the voice ID is wrong. With `TTS_SERVER_URL` set: the server isn't
-  answering (check `GET /v1/models` on it), or `TTS_SERVER_VOICE` names a
-  voice it doesn't have (`GET /v1/audio/voices` lists them). Fine for
-  testing; set it when you want the real voice.
+- **He answers in the built-in voice.** `TTS_SERVER_URL` is unset, or the
+  server isn't answering (check `GET /v1/models` on it), or
+  `TTS_SERVER_VOICE` names a voice it doesn't have
+  (`GET /v1/audio/voices` lists them). Fine for testing; set it when you
+  want the real voice.
 - **"cannot speak: no built-in voice on this system."** Linux without
-  `espeak-ng`. Install it, or set a Fish key.
+  `espeak-ng`. Install it, or set `TTS_SERVER_URL`.
 - **The voice rattles or sounds muffled.** Use the voice sliders under
   Settings → Advanced in the dashboard.
 - **He cuts you off, or waits too long.** Raise "Sure you're finished"
@@ -780,11 +800,11 @@ what Rocky is told he can do. A different screen driver goes near the top of
   (`turn.py`) to decide when you have finished. `thinking.py` talks to the
   model, streams the reply sentence by sentence, and gives the model two
   tools: `look` (move the head, take a picture) and `track_face`.
-  `mouth.py` turns text into audio with your own speech server or Fish
-  Audio and levels it for the small speaker. `tracker.py` follows faces
+  `mouth.py` turns text into audio with your own speech server and levels
+  it for the small speaker. `tracker.py` follows faces
   with OpenCV. `perception.py` notices faces and a wave. With no robot
-  connected, Settings > Vision can run his eyes from this computer's
-  camera instead (`LocalCamera` in `eyes.py`, OpenCV). `focus.py` runs
+  connected, the dashboard's browser stands in for its mic, camera and
+  speaker (`main.py`'s console WebSocket). `focus.py` runs
   focus sessions, asking OpenAI's Decisions API about the camera frame
   through `decisions.py`. `eyes.py` serves
   the camera and the Live page. `settings.py` reads and writes
@@ -796,10 +816,10 @@ what Rocky is told he can do. A different screen driver goes near the top of
 - **Protocol** between the two is in [`docs/protocol.md`](docs/protocol.md):
   JSON commands one way, audio and JPEG frames the other.
 
-Tests run with no hardware and no downloads:
+Tests run with no hardware and no downloads (from `server/`, venv active):
 
 ```bash
-cd server && python -m unittest tests/test_*.py
+python -m pytest tests -q        # or: python -m unittest tests/test_*.py
 ```
 
 ## Privacy and security
@@ -817,32 +837,31 @@ cd server && python -m unittest tests/test_*.py
   connection only from the same address or once the old one has gone
   quiet. The token travels unencrypted on your WiFi, so treat a guest
   network as untrusted.
-- **The dashboard is this computer only** and rejects requests from other
-  hosts and from other websites' pages (including framing it). Opening it to
-  the LAN (`LIVE_VIEW_BIND` in `config.py`) would let anyone on your WiFi
-  watch the camera and read transcripts; its controls still answer this
-  computer only. Other user accounts on this computer can open it too.
+- **The console (dashboard, live view, controls) is gated by one shared
+  token.** `CONSOLE_TOKEN` in `server/.env`: the page opens with
+  `?token=<it>` and carries it as a header after that, and controls also
+  need a custom header a cross-site page can't send. The console ports are
+  published on loopback only — reached through an ssh/Tailscale tunnel,
+  which provides the privacy (plain http is fine); the token is the gate.
+  In local development (loopback bind, no token) it answers this computer
+  only, and other user accounts on it can open it too.
 - **Voice is unauthenticated by design.** Anyone in earshot can say "hey
-  Rocky". All he can do is move his head and spend a fraction of a cent,
-  plus, if you switch on computer control, open the sites, apps, music and
-  Shortcuts on your lists (no typing, clicking or buying). A Shortcut only
-  runs after he asks and the next thing said to him starts with a yes. With
-  an OpenAI key, anyone can also start a focus session, which sends camera
-  pictures to OpenAI until it ends (at most 3 hours, about 25 cents) or
-  someone stops it.
+  Rocky". All he can do is move his head and spend a fraction of a cent.
+  With an OpenAI key, anyone can also start a focus session, which sends
+  camera pictures to OpenAI until it ends (at most 3 hours, about 25
+  cents) or someone stops it.
 - **What leaves your computer:** each question sends the transcript, the recent
   conversation, your name from `HUMAN_NAME`, a camera picture and the
   face note (while he's awake; turn "A picture with every question"
   off in Settings > Vision to send pictures only for visual questions) to
-  your model provider, and each reply's text to Fish Audio if configured
-  (a speech server of your own keeps that text on your own box).
+  your model provider; the reply's text stays on your own box when the
+  speech server is yours.
   Speech-to-text, face tracking and perception run locally. The first run
   downloads speech and vision models from Hugging Face, GitHub and Google,
   pinned to fixed versions. The dashboard page loads nothing from
   the internet. The robot asks an internet time server for the time, and
   Open-Meteo for the weather at the location you set (rounded to about
   1 km); the dashboard's town search sends what you type to Open-Meteo.
-  With a Spotify key, "play ..." sends the search words to Spotify.
   **During a focus session**, a camera picture goes to OpenAI every 3
   seconds, and only then. It is the same picture you see on the Live tab,
   with you in it. OpenAI's API data policy covers what it keeps and for how
@@ -851,8 +870,9 @@ cd server && python -m unittest tests/test_*.py
   both to it, also while he sleeps on the clock (the camera at 5 frames a
   second, so a wave can wake him; the mic, so his name can). They stop when
   the brain disconnects. There is no light that shows it. While it runs
-  alone, the computer's own microphone feeds him — and its camera too,
-  only if you turned on "He sees through" (nothing opens otherwise).
+  without the robot, the dashboard's browser can stand in for the mic and
+  camera — only after you press the button and allow it, and the browser
+  shows its own recording indicator while it runs.
 - **What is stored:** the in-memory conversation and your dashboard
   settings (`server/settings.json`, and the clock part in the robot's
   flash). The dashboard's log lives in memory and is gone when the launcher

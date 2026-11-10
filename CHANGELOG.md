@@ -3,6 +3,47 @@
 Each version of the robot is a git tag and a GitHub Release. `main` is the
 latest work. A video matches the tagged version it was made with.
 
+## Fork: local-brain server in podman - in progress
+
+This fork repositions the project: the brain runs headless on a remote
+Linux box inside rootless podman, the robot connects to it over the LAN,
+and the human talks to it from the dashboard opened through a Tailscale/ssh
+tunnel, using that browser's mic/webcam/speaker as a robot substitute while
+the real robot is offline. Future robot actions go through APIs/MCP, so all
+"control the host computer" code is deleted.
+
+- Fish Audio removed entirely. The voice is your own speech server
+  (`TTS_SERVER_URL`/`TTS_SERVER_VOICE`, e.g. gufo + Qwen3-TTS) with the
+  built-in voice (espeak-ng on Linux) as fallback. A personality's voice is
+  a plain name on that server instead of a Fish voice ID and model, and
+  acting cues ([sighs], <whisper>) are no longer written or performed.
+  Old character files keep loading (unknown keys ignored).
+- Host-computer control deleted: `brain/computer.py` (apps, music, volume,
+  Shortcuts, web search/bookmarks, Spotify), the "Let Rocky use my
+  computer" settings, and the Mac/Windows docs for it. Future actions come
+  through APIs/MCP servers, not host control.
+- Host-device A/V deleted: the local microphone (sounddevice), the local
+  camera (`LocalCamera`), and local speaker playback (`say`/`afplay`/
+  PowerShell; espeak-ng remains the built-in fallback voice).
+- The browser stands in for the robot while it's offline: a second
+  WebSocket to the brain's robot port (`hello_console` with
+  `CONSOLE_TOKEN`) carries the dashboard's mic up and Rocky's voice down,
+  in the robot's own 16 kHz PCM framing, and the webcam's JPEGs are POSTed
+  at ~5 fps. One browser at a time, never while the robot is connected
+  (`av_taken` hands over). Chrome only: the mic is captured with an
+  AudioWorklet (Firefox delivers silence to `createMediaStreamSource` when
+  its audio-processing pipeline is engaged, so it isn't supported).
+- One shared `CONSOLE_TOKEN` gates the dashboard and live view (replacing
+  the loopback/Host allowlists): the page opens with `?token=`, carries it
+  as a header after that, and the controls keep their custom header. The
+  console binds all interfaces inside the container and is published on
+  loopback only, reached through an ssh/Tailscale tunnel.
+- Ships as rootless podman + Quadlet (`deploy/Containerfile`,
+  `deploy/desk-robot.container`): python:3.12-slim with espeak-ng, UID
+  1000, model cache and personalities in named volumes, the robot's port
+  8765 on the LAN and the console ports on loopback. Firmware protocol
+  unchanged — only `BRAIN_HOST` points at the server now.
+
 ## v2.1 - 2026-11-06
 
 Software:
