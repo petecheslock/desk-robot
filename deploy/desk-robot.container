@@ -1,0 +1,51 @@
+# Rocky's brain as a rootless systemd user service (Quadlet). Install:
+#
+#   mkdir -p ~/.config/containers/systemd ~/.config/desk-robot
+#   cp deploy/desk-robot.container ~/.config/containers/systemd/
+#   cp server/.env.example ~/.config/desk-robot/.env   (then fill it in: server/.env.example says how)
+#   touch ~/.config/desk-robot/settings.json            (dashboard settings, kept across rebuilds)
+#   systemctl --user daemon-reload
+#   systemctl --user start desk-robot.service
+#   journalctl --user -u desk-robot -f          (the brain's console; `podman exec -it` for stdin)
+#
+# Build the image first (Quadlet can also build it from the repo, see `man podman-systemd.unit`):
+#   podman build -t desk-robot -f deploy/Containerfile .
+#
+# Port mapping is the exposure model:
+#   8765  published on the LAN: the robot connects to it (ROBOT_TOKEN gates it)
+#   8766, 8767  published on loopback only: the dashboard and live view, reached through an
+#         ssh/tailscale tunnel and gated by CONSOLE_TOKEN (never expose the console to the LAN)
+# Ports are above 1024, so no extra capabilities are needed.
+[Unit]
+Description=Rocky desk-robot brain server
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+ContainerName=desk-robot
+Image=desk-robot:latest
+#PublishPort=8765
+PublishPort=127.0.0.1:8766:8766
+PublishPort=127.0.0.1:8767:8767
+
+# ROBOT_TOKEN, CONSOLE_TOKEN, LLM_API_KEY, TTS_SERVER_URL, ... (server/.env.example lists them)
+EnvironmentFile=%h/.config/desk-robot/.env
+
+# Personalities and face packs you made in the dashboard, and the model cache (~200 MB after
+# the first run's downloads), so both survive image rebuilds. The dashboard's settings.json is
+# a plain file on the host (podman can't volume-mount a single file from a named volume).
+Volume=desk-robot-characters:/srv/desk-robot/server/characters
+Volume=desk-robot-cache:/home/rocky/.cache
+Volume=%h/.config/desk-robot/settings.json:/srv/desk-robot/server/settings.json
+
+# No host access beyond the file and volumes above: no host networking, no privileged, no new
+# privileges — future actions come through APIs/MCP, not host control.
+
+[Service]
+# The brain holds a WebSocket to the robot and the console connections: stop gently.
+KillSignal=SIGINT
+TimeoutStopSec=30
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

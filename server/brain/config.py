@@ -58,16 +58,23 @@ LLM_REASONING = False
 # WebSocket port the robot connects to.
 PORT = 8765
 
+# The console (dashboard + live view + controls), reached through a Tailscale/ssh tunnel from your own
+# machine. One shared token gates it (same style as ROBOT_TOKEN): the browser opens the page with
+# ?token=<CONSOLE_TOKEN> and keeps it in memory for the requests that follow. Required whenever
+# LIVE_VIEW_BIND isn't loopback-only; with loopback-only binding (local development) it can stay empty.
+#   CONSOLE_TOKEN  at least 16 random characters, e.g. `python3 -c "import secrets; print(secrets.token_hex(16))"`
+#   PUBLIC_HOST    optional belt against DNS rebinding: when set, requests whose Host header doesn't
+#                  name it are refused. Leave empty to accept any Host (the token is the real gate).
+CONSOLE_TOKEN = os.environ.get("CONSOLE_TOKEN", "").strip()
+PUBLIC_HOST = (os.environ.get("PUBLIC_HOST") or "").strip().lower()
+
 # Rocky's voice and how much he says. The character itself (system prompt,
 # canned lines) is in personality.py.
-#   TTS_VOICE_ID  Fish Audio (fish.audio) voice: open the voice's page on the
-#                 site and copy the 32-char ID from the URL. Needs
-#                 FISH_AUDIO_API_KEY in server/.env.
 #   TTS_TEMPERATURE / TTS_TOP_P
-#                 Fish generation settings. Lower = steadier, fewer
-#                 hallucinated sounds/laughs/extra words (a known quirk of
-#                 generated speech); higher = more expressive. Fish's
-#                 defaults are 0.7 / 0.7.
+#                 generation settings sent to the speech server with every
+#                 request. Lower = steadier, fewer hallucinated sounds/
+#                 laughs/extra words; higher = more expressive. A server is
+#                 free to ignore them (gufo/Qwen3-TTS does).
 #   REPLY_MAX_SENTENCES
 #                 the prompt asks for at most this many, and the server cuts
 #                 anything past it before it's spoken (keeps voice cost down).
@@ -82,12 +89,11 @@ PORT = 8765
 #                 boost above ~1.5 kHz, where speech clarity lives, 0 = off.
 #                 Lifts a muffled voice; too much sounds thin and hissy.
 #   TTS_SERVER_URL
-#                 a speech server of your own, used instead of Fish Audio: the
-#                 address of anything serving the OpenAI audio API — POST
-#                 /v1/audio/speech with {model, voice, input} — on a LAN or
-#                 tailnet, e.g. http://host:8190. No key: nothing is sent with
-#                 the request. Set, it speaks; unset or unreachable, Fish
-#                 Audio, then this computer's own voice.
+#                 your speech server: the address of anything serving the
+#                 OpenAI audio API — POST /v1/audio/speech with {model, voice,
+#                 input} — on a LAN or tailnet, e.g. http://host:8190. No key:
+#                 nothing is sent with the request. Set, it speaks; unset or
+#                 unreachable, the built-in voice (espeak-ng).
 #   TTS_SERVER_VOICE
 #                 which voice to ask that server for, by name (its
 #                 GET /v1/audio/voices lists them). Needed rather than
@@ -97,9 +103,6 @@ PORT = 8765
 # live; set the winners here to keep them.
 TTS_SERVER_URL = (os.environ.get("TTS_SERVER_URL") or "").rstrip("/")
 TTS_SERVER_VOICE = os.environ.get("TTS_SERVER_VOICE") or ""
-TTS_VOICE_ID = "6dd07916890445e59c5f019ad0fc7879"
-TTS_MODEL = ""    # Fish's model (its `model` header): "" = Fish's default, "drama-3" = Drama 3. A character sets its own
-TTS_ACTING = False  # the voice model performs [directions] and <whisper>...</whisper> (Drama 3), so they're kept in
 TTS_TEMPERATURE = 0.4
 TTS_TOP_P = 0.6
 REPLY_MAX_SENTENCES = 3
@@ -118,16 +121,15 @@ TTS_AUTO_PRESENCE = True
 TTS_CLARITY_DB = -1.5
 TTS_AUTO_PRESENCE_MAX = 6.0
 
-# Text-to-speech. The voice comes from Fish Audio (TTS_VOICE_ID above).
-TTS_FALLBACK_VOICE = "Fred"  # built-in voice used until Fish Audio is set up: a macOS `say`
-                             # voice name (`say -v ?` lists them); Windows and Linux use their default
-# Loudness. Fish's level wanders from line to line, so the audio goes through
-# an automatic gain control (mouth.Leveler) that holds it near TTS_LEVEL
-# (RMS, 0..1) using at most TTS_MAX_GAIN of boost, with a soft limiter on
-# the peaks. 0.12 / 6.0 are the values of the original build (2026-09-06),
-# which sounded right on the robot's speaker; 0.26 drove every peak into
-# the limiter and the amp near clipping (crackly, muffled). Raise the
-# robot's `volume` for everyday loudness, not this.
+# Text-to-speech. The voice comes from the speech server (TTS_SERVER_VOICE
+# above); a character can bring its own name for it.
+TTS_FALLBACK_VOICE = ""  # espeak-ng voice name for the built-in fallback (espeak-ng --voices lists
+                         # them); empty = espeak-ng's default
+# Loudness. A voice's level wanders from line to line, so the audio goes
+# through an automatic gain control (mouth.Leveler) that holds it near
+# TTS_LEVEL (RMS, 0..1) using at most TTS_MAX_GAIN of boost, with a soft
+# limiter on the peaks. 0.12 / 6.0 sounded right on the robot's speaker.
+# Raise the robot's `volume` for everyday loudness, not this.
 TTS_MAX_GAIN = 6.0
 # The loudest a sample may get (0..1 of full scale) before the robot's volume. The MAX98357A amp at its default
 # 9 dB gain asks for about 1.6 W into an 8 ohm speaker at full scale but stays clean only to about 1.4 W, and less
@@ -153,9 +155,7 @@ WAKE_PHRASES = [  # what speech-to-text tends to hear for "hey Rocky"
     "hey ricky",
 ]
 if CHARACTER:
-    TTS_VOICE_ID = CHARACTER["voice_id"]
-    TTS_MODEL = CHARACTER["tts_model"]
-    TTS_ACTING = TTS_MODEL in _characters.ACTING_MODELS
+    TTS_SERVER_VOICE = CHARACTER.get("voice") or TTS_SERVER_VOICE
     WAKE_PHRASES = CHARACTER["wake_words"]
 STT_MODEL = "base.en"    # faster-whisper model: base.en ~0.3 s per utterance on an Apple
                          # Silicon Mac, small.en hears a little better but takes ~1 s
@@ -164,14 +164,9 @@ STT_MODEL = "base.en"    # faster-whisper model: base.en ~0.3 s per utterance on
 STT_REVISION = "3d3d5dee26484f91867d81cb899cfcf72b96be6c"
 STT_THREADS = 8          # CPU threads for transcription (0 = library default of 4)
 STT_PROMPT = f"Hey {ROBOT_NAME}. {ROBOT_NAME} is a robot."  # name hint for the model
-MIC_SOURCE = "auto"      # "robot" = the robot's mic, "mac" = MIC_DEVICE below,
-                         # "auto" = robot when it's connected, else this computer
-                         # (the dashboard's "He listens through" sets both: settings rocky.mic / mic_device)
-SPEAKER_OUT = "robot"    # where Rocky's voice plays: "robot" = the robot's speaker when it's connected
-                         # (else this computer), "computer" = always this computer. The live view
-                         # switches it too (until restart).
-MIC_DEVICE = os.environ.get("MIC_DEVICE") or None  # local input by name (set MIC_DEVICE in
-                         # server/.env); None = system default. List devices: python -m sounddevice
+# Which mic he listens through: "auto" = the robot's while it's connected, else the dashboard's
+# browser A/V when you start it; "robot" = only ever the robot's. The dashboard sets it (rocky.mic).
+MIC_SOURCE = "auto"
 # Speech detection (server/brain/turn.py). A Silero VAD model decides whether
 # each 32 ms chunk is speech (VAD_THRESHOLD, 0..1: lower = more sensitive).
 # Once speech starts, a cutoff 0.15 lower keeps softer syllables from being
@@ -215,17 +210,11 @@ CAMERA_FPS = 10
 CAMERA_STREAM_SIZE = "vga"   # "vga" 640x480 (sharper face tracking, ~170 KB/s of WiFi) or "qvga" 320x240
 LIVE_VIEW_PORT = 8767   # the brain's own page + API. The launcher (server/launcher.py) serves the dashboard on 8766
                         # and passes these through; without the launcher, open this port directly
-LIVE_VIEW_BIND = "127.0.0.1"  # this computer only. "0.0.0.0" would show the page and camera to the whole LAN
-                              # (the controls still answer this computer only).
+LIVE_VIEW_BIND = os.environ.get("LIVE_VIEW_BIND") or "0.0.0.0"  # all interfaces: inside the container the port
+                             # mapping is the exposure, and the console is reached through a tunnel. Local
+                             # development: set 127.0.0.1 in server/.env (then CONSOLE_TOKEN may stay empty).
+                             # Either way the console answers only with the token.
 SEND_CAMERA_TO_BRAIN = True  # let Rocky see the camera at all (False = no picture ever goes to the model)
-# Where the pictures come from while no robot is connected. "robot" (the default): no robot, no camera. "mac":
-# this computer's camera, on any system (dashboard: Settings > Vision; CAMERA_LOCAL_INDEX picks a second
-# camera, None = the default). While a robot IS connected its camera always wins, so this only matters running
-# the server alone. The value is "mac" for consistency with the mic's MIC_SOURCE (same wording, same idea).
-CAMERA_SOURCE = (os.environ.get("CAMERA_SOURCE") or "robot").strip().lower()
-CAMERA_LOCAL_INDEX = (os.environ.get("CAMERA_LOCAL_INDEX") or "").strip() or None  # cv2 camera number; None = default
-CAMERA_LOCAL_ROTATE = 0      # turn THIS computer's pictures 0/90/180/270 deg (the robot's CAMERA_ROTATE is its own)
-CAMERA_LOCAL_MIRROR = False  # and mirror them left-right (webcam pictures already come out the right way round)
 # Seeing better (dashboard: Settings > Vision).
 #   VISION_EVERY_QUESTION  attach the camera's picture to every question while he's awake, not only ones about
 #                          seeing, so he knows what you're doing (a small picture costs ~100 tokens, a sharp one

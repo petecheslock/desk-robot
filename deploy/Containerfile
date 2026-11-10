@@ -1,0 +1,39 @@
+# Rocky's brain, as a rootless container. Build and run from the repo root:
+#
+#   podman build -t desk-robot -f deploy/Containerfile .
+#   ~/.config/containers/systemd/desk-robot.container    (see deploy/desk-robot.container)
+#   systemctl --user daemon-reload && systemctl --user start desk-robot
+#
+# The image is plain python:3.12-slim plus the system libraries OpenCV and mediapipe need
+# (libgl1, libglib2.0-0) and espeak-ng for the built-in fallback voice. Everything else comes
+# from server/requirements.txt, pinned. Runs as UID 1000 ("rocky"): never root, no sudo,
+# and nothing in the container can touch the host beyond the two named volumes.
+FROM python:3.12-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends espeak-ng libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /srv/desk-robot
+COPY server/requirements.txt server/requirements.txt
+RUN pip install --no-cache-dir -r server/requirements.txt
+
+COPY server/ server/
+
+# The model cache (faster-whisper, the turn-taking models, the perception models) lands in
+# $HOME/.cache: mount a named volume there so the ~200 MB survives rebuilds and the first-run
+# downloads happen once. STT_REVISION in brain/config.py pins the speech model's commit.
+ENV HOME=/home/rocky \
+    PYTHONUNBUFFERED=1
+RUN useradd --uid 1000 --user-group --create-home rocky \
+    && mkdir -p /home/rocky \
+    && chown -R rocky:rocky /srv/desk-robot /home/rocky
+USER rocky
+
+# The launcher serves the dashboard on 127.0.0.1:8766 (inside the container) and starts the
+# brain with it; the brain serves its live view on 8767 and listens for the robot on 8765.
+# Ports are published by the Quadlet unit, not here.
+ENV ROCKY_START_BRAIN=1
+EXPOSE 8765 8766 8767
+WORKDIR /srv/desk-robot/server
+CMD ["python", "launcher.py"]
