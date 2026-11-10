@@ -1,14 +1,13 @@
-"""Characters made in the dashboard: checking, the prompt they become, and the acting cues of Drama 3 voices."""
+"""Characters made in the dashboard: checking, the prompt they become, and the cues no voice
+performs any more."""
 
 import unittest
 
 from brain import characters, config, faces, mouth, personality, thinking
 
-VOICE = "0123456789abcdef0123456789abcdef"
-
 
 def sample(**over):
-    ch = {"name": "Juniper", "voice_id": f"https://fish.audio/m/{VOICE}/", "tts_model": "drama-3",
+    ch = {"name": "Juniper", "voice": "juniper",
           "prompt": "You are Juniper, an old sea captain who calls {human} first mate and distrusts gadgets.",
           "examples": "[happy] Ahoy, {human}!", "wake_words": ["Hey Juniper", "hey junipur"],
           "lines": {"wake": "Aye?", "sleep": "Going below.", "track_on": "Eyes on you, {human}.", "track_off": "At ease."}}
@@ -17,8 +16,23 @@ def sample(**over):
 
 
 class CleanTest(unittest.TestCase):
-    def test_voice_id_from_the_address(self):
-        self.assertEqual(characters.clean(sample())["voice_id"], VOICE)
+    def test_a_voice_name_is_kept_as_written(self):
+        self.assertEqual(characters.clean(sample())["voice"], "juniper")
+
+    def test_a_missing_voice_is_allowed_and_empty(self):
+        """Old files (and a fresh form) have no voice: the .env one is used."""
+        ch = sample(voice=None)
+        del ch["voice"]
+        self.assertEqual(characters.clean(ch)["voice"], "")
+
+    def test_old_fish_keys_are_ignored(self):
+        """A character saved before the fork carries voice_id/tts_model: it loads, the keys are
+        dropped, and the voice falls back to empty."""
+        ch = characters.clean(sample(voice="", voice_id="0123456789abcdef0123456789abcdef",
+                                     tts_model="drama-3"))
+        self.assertEqual(ch["voice"], "")
+        self.assertNotIn("voice_id", ch)
+        self.assertNotIn("tts_model", ch)
 
     def test_hey_name_is_always_a_wake_word(self):
         words = characters.clean(sample(wake_words=["hi juniper"]))["wake_words"]
@@ -26,8 +40,8 @@ class CleanTest(unittest.TestCase):
         self.assertIn("hi juniper", words)
 
     def test_rejects(self):
-        for bad in (dict(name="Rocky"), dict(name="J"), dict(voice_id="nope"), dict(tts_model="s9"),
-                    dict(prompt="short"), dict(lines={"wake": "Aye?"}), dict(wake_words=["juniper"])):
+        for bad in (dict(name="Rocky"), dict(name="J"), dict(prompt="short"), dict(lines={"wake": "Aye?"}),
+                    dict(wake_words=["juniper"]), dict(voice="x" * 121)):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 characters.clean(sample(**bad))
 
@@ -48,38 +62,23 @@ class PromptTest(unittest.TestCase):
         self.assertIn("`look`", p)
 
 
-class ActingTest(unittest.TestCase):
-    def setUp(self):
-        self._acting = config.TTS_ACTING
-        config.TTS_ACTING = True
+class CueTest(unittest.TestCase):
+    """No voice performs cues: they're dropped from what's spoken and shown."""
 
-    def tearDown(self):
-        config.TTS_ACTING = self._acting
-
-    def test_cues_kept_for_the_voice_and_dropped_for_the_page(self):
-        self.assertEqual(mouth.clean_for_acting("[small laugh] Oh, you again!!"), "[small laugh] Oh, you again!")
+    def test_cues_are_dropped(self):
+        self.assertEqual(mouth.without_cues("[small laugh] Oh, you again!!"), "Oh, you again!!")
         self.assertEqual(mouth.without_cues("[sighs] Long <slow>day</slow>."), "Long day .")
-
-    def test_a_tag_split_across_sentences_is_closed_in_each(self):
-        self.assertEqual(mouth.clean_for_acting("<whisper>Go on."), "<whisper> Go on.</whisper>")
-        self.assertTrue(mouth.clean_for_acting("without me.</whisper>").startswith("<whisper>"))
 
     def test_face_found_whichever_comes_first(self):
         b = thinking.RobotBrain.__new__(thinking.RobotBrain)
         for text, emotion, rest in (("[happy] [small laugh] Yes.", "happy", "[small laugh] Yes."),
-                                    ("[sighs] [sad] Oh no.", "sad", "[sighs] Oh no."),
-                                    ("[excited, talking fast] Hah!", "excited", "[talking fast] Hah!"),
-                                    ("[sighs] Long day.", "neutral", "[sighs] Long day.")):
+                                    ("[sighs] [sad] Oh no.", "neutral", "[sad] Oh no."),
+                                    ("[excited, talking fast] Hah!", "neutral", "[excited, talking fast] Hah!"),
+                                    ("[sighs] Long day.", "neutral", "Long day."),
+                                    ("[sad] Oh no.", "sad", "Oh no.")):
             b.emotion = "neutral"
             self.assertEqual(b._take_emotion_tag(text, final=False), (rest, True))
             self.assertEqual(b.emotion, emotion)
-
-    def test_rocky_unchanged(self):
-        config.TTS_ACTING = False
-        self.assertEqual(mouth.without_cues("[sighs] hi"), "[sighs] hi")
-        b = thinking.RobotBrain.__new__(thinking.RobotBrain)
-        b.emotion = "neutral"
-        self.assertEqual(b._take_emotion_tag("[sighs] hi", final=False), ("hi", True))
 
 
 if __name__ == "__main__":

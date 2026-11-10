@@ -1,7 +1,7 @@
-"""A speech server of your own instead of Fish Audio: what it's asked for, and the audio
-that comes back at the model's own rate becoming the 16 kHz the robot's speaker expects.Covers the request that goes out, the rate that comes back, and falling through to
-the next voice when the server isn't there. Every fake takes **kw because a request
-made over https carries a certifi `context` that a stub would otherwise choke on.
+"""A speech server of your own: what it's asked for, the audio that comes back at the model's own
+rate becoming the 16 kHz the robot's speaker expects, and falling through to the built-in voice
+when the server isn't there. Every fake takes **kw because a request made over https carries a
+certifi `context` that a stub would otherwise choke on.
 """
 
 import io
@@ -185,66 +185,46 @@ class RateTest(unittest.TestCase):
         self.assertEqual(sum(len(c) for c in chunks) % 2, 0)
 
 
-class PriorityTest(unittest.TestCase):
-    """The server wins over Fish Audio, Fish over the computer's voice, and a dead one falls through."""
+class FallbackTest(unittest.TestCase):
+    """The server speaks when it's there; a dead one must never silence the robot: the built-in
+    voice takes over."""
 
     def setUp(self):
-        mouth._SERVER = {"model": "m", "rate": 24_000}
+        mouth._SERVER = None
         self.addCleanup(setattr, mouth, "_SERVER", None)
 
-    def _run(self, url, dead=(), fish=True):
-        """Speak once against a server at `url` ("" = none), whose speech calls fail when its
-        host is in `dead`, and record what was asked of whom. Fish answers a bad voice ID
-        with 400 and nothing else, which is what makes it fall through here too."""
-        calls = []
+    def _speak(self, url):
+        asked = []
 
         def fake(req, timeout=0, **kw):
-            calls.append(req.full_url)
+            asked.append(req.full_url)
             if req.full_url.endswith("/v1/models"):
                 return FakeResponse([json.dumps({"data": [{"id": "m"}]}).encode()], "application/json")
-            host = urllib.parse.urlparse(req.full_url).netloc.split(":")[0]
-            if json.loads(req.data).get("input") == ".":      # the startup rate probe
-                if host in dead:
-                    raise urllib.error.URLError("nobody home")
-                return FakeResponse([b"\0" * 48_000])         # 1 s at the server's own rate
-            if host in dead:
-                raise urllib.error.URLError("nobody home")
-            if "fish.audio" in host:
-                raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", {}, None)
-            return FakeResponse([b"\0" * 48_000])
+            raise urllib.error.URLError("nobody home")
+
+        built_in = []
+
+        def synth(text):
+            built_in.append(text)
+            return b"\7" * 512
 
         with patch.object(config, "TTS_SERVER_URL", url), patch.object(config, "TTS_SERVER_VOICE", "rocky"), \
-                patch.object(config, "TTS_VOICE_ID", "0123456789abcdef0123456789abcdef"), \
-                patch.dict("os.environ", {"FISH_AUDIO_API_KEY": "k" if fish else ""}), \
-                patch.object(mouth, "_synthesize_builtin", lambda text: b"\7" * 512), \
-                patch_urlopen(fake):
+                patch.object(mouth, "_synthesize_builtin", synth), patch_urlopen(fake):
             audio = b"".join(mouth.stream("Hello there."))
-        return calls, audio
+        return asked, built_in, audio
 
-    def speech_to(self, calls, host):
-        """Speech requests sent to one host: everything but its /v1/models read
-        (Fish's route is /v1/tts, so the path says nothing useful here)."""
-        return [c for c in calls if host in c and not c.endswith("/v1/models")]
-
-    def test_the_server_is_used_instead_of_fish_audio(self):
-        calls, audio = self._run("http://host:8190")
-        self.assertEqual(len(self.speech_to(calls, "host:8190")), 1)     # his line; Fish stays untouched
-        self.assertFalse(self.speech_to(calls, "fish.audio"))
+    def test_no_server_means_the_builtin_voice(self):
+        asked, built_in, audio = self._speak("")
+        self.assertEqual(asked, [])
+        self.assertEqual(built_in, ["Hello there."])
         self.assertGreater(len(audio), 0)
 
-    def test_fish_audio_still_works_when_no_server_is_set(self):
-        calls, audio = self._run("")
-        self.assertEqual(len(self.speech_to(calls, "fish.audio")), 1)
-        self.assertFalse(self.speech_to(calls, "host:8190"))
-
-    def test_a_server_that_is_down_does_not_silence_the_robot(self):
-        """One provider going down must never leave a reply unsaid: it falls through to
-        Fish Audio, and from there to the computer's own voice. The name is .invalid,
-        which no resolver can answer, so this needs no network."""
+    def test_a_server_that_is_down_falls_through_to_the_builtin_voice(self):
+        """The name is .invalid, which no resolver can answer, so this needs no network."""
         dead = "nonexistent-host.invalid"
-        calls, audio = self._run(f"http://{dead}:8190", dead={dead})
-        self.assertTrue(any(dead in c for c in calls))
-        self.assertEqual(len(self.speech_to(calls, "fish.audio")), 1)    # fell through to Fish
+        asked, built_in, audio = self._speak(f"http://{dead}:8190")
+        self.assertTrue(any(dead in c for c in asked))
+        self.assertEqual(built_in, ["Hello there."])    # fell through
         self.assertGreater(len(audio), 0)
 
 
@@ -254,8 +234,8 @@ class EqualizerKeyTest(unittest.TestCase):
                 patch.object(config, "TTS_SERVER_VOICE", "rocky"):
             server = mouth.Leveler.equalizer_key()
         with patch.object(config, "TTS_SERVER_URL", ""):
-            fish = mouth.Leveler.equalizer_key()
-        self.assertNotEqual(server, fish)
+            builtin = mouth.Leveler.equalizer_key()
+        self.assertNotEqual(server, builtin)
         self.assertIn("rocky", server)
 
     def test_the_same_server_under_two_spellings_is_one_voice(self):
@@ -272,54 +252,39 @@ class EqualizerKeyTest(unittest.TestCase):
 
 
 class ActingCueTest(unittest.TestCase):
-    """An acting character's [directions] and <whisper> tags are for Drama 3 to perform.
-    A generic speech server reads them out, so when that's the voice, the cues must not reach it."""
+    """No voice performs [directions] or <whisper> tags any more, so they must never reach
+    the speech server (it would read them out) nor the page."""
 
-    def _asked_text(self, url):
+    def test_the_server_is_asked_for_the_words_alone(self):
         asked = []
 
         def fake(req, timeout=0, **kw):
             if req.full_url.endswith("/v1/models"):
                 return FakeResponse([json.dumps({"data": [{"id": "m"}]}).encode()], "application/json")
             body = json.loads(req.data)
-            if body.get("input", body.get("text")) != ".":   # not the startup rate probe
-                asked.append(body.get("input") or body.get("text"))
+            if body.get("input") != ".":   # not the startup rate probe
+                asked.append(body["input"])
             return FakeResponse([b"\0" * 9600])
 
-        with patch.object(config, "TTS_ACTING", True), \
-                patch.object(config, "TTS_SERVER_URL", url), \
+        with patch.object(config, "TTS_SERVER_URL", "http://host:8190"), \
                 patch.object(config, "TTS_SERVER_VOICE", "rocky"), \
-                patch.object(config, "TTS_VOICE_ID", "0123456789abcdef0123456789abcdef"), \
-                patch.dict("os.environ", {"FISH_AUDIO_API_KEY": "k"}), \
                 patch.object(mouth, "_synthesize_builtin", lambda text: b""), \
                 patch_urlopen(fake):
             mouth._SERVER = {"model": "m", "rate": 24_000}
             list(mouth.stream("[sighs] Long <whisper>day</whisper>."))
-        return asked
+        self.assertEqual(len(asked), 1)
+        self.assertNotIn("[sighs]", asked[0])
+        self.assertNotIn("<whisper>", asked[0])
 
-    def test_the_server_is_asked_for_the_words_alone(self):
-        texts = self._asked_text("http://host:8190")
-        self.assertEqual(len(texts), 1)
-        self.assertNotIn("[sighs]", texts[0])
-        self.assertNotIn("<whisper>", texts[0])
+    def test_cues_are_dropped_whatever_the_voice(self):
+        self.assertEqual(mouth.without_cues("[small laugh] Oh, you again."), "Oh, you again.")
+        self.assertEqual(mouth.without_cues("[sighs] Long <slow>day</slow>."), "Long day .")
 
-    def test_fish_still_gets_the_cues_to_perform(self):
-        texts = self._asked_text("")
-        self.assertEqual(len(texts), 1)
-        self.assertIn("[sighs]", texts[0])
-        self.assertIn("<whisper> day </whisper>", texts[0])   # clean_for_acting keeps the cues, spaced
-
-    def test_the_prompt_only_offers_cues_to_an_acting_voice(self):
+    def test_the_prompt_never_offers_cues(self):
         from brain import personality
         ch = {"name": "J", "prompt": "You are J.", "examples": "[happy] Hi.",
               "lines": {}, "wake_words": ["hey j"]}
-        with patch.object(config, "TTS_ACTING", True), \
-                patch.object(config, "TTS_SERVER_URL", "http://host:8190"), \
-                patch.object(config, "TTS_SERVER_VOICE", "rocky"):
-            self.assertNotIn("Your voice can act", personality._character_prompt(ch))
-        with patch.object(config, "TTS_ACTING", True), \
-                patch.object(config, "TTS_SERVER_URL", ""):
-            self.assertIn("Your voice can act", personality._character_prompt(ch))
+        self.assertNotIn("Your voice can act", personality._character_prompt(ch))
 
 
 if __name__ == "__main__":

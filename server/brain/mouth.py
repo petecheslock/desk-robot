@@ -1,22 +1,16 @@
 """Mouth: turn the robot's words into sound.
 
-Three voices:
+Two voices:
   * your own speech server (config.TTS_SERVER_URL), when that's set: anything
     that speaks the OpenAI audio API over plain HTTP — POST /v1/audio/speech
     with {model, voice, input}, GET /v1/models to say what model that is. No
     key. It answers at whatever rate its model speaks, so the audio is
     resampled here.
-  * Fish Audio (Rocky's real voice, config.TTS_VOICE_ID) when
-    FISH_AUDIO_API_KEY is set. Plain HTTPS POST asking for raw 16 kHz PCM. The response body
-    streams, so the first audio arrives ~0.3 s in, long before the sentence
-    is finished, and is passed straight on to the speaker.
   * the computer's built-in voice as the fallback so the loop is audible
-    before that's set up: `say` on macOS, Windows' speech engine through
-    PowerShell, espeak-ng on Linux.
+    before that's set up: espeak-ng on Linux.
 
 `stream(text)` yields 16 kHz mono s16le PCM chunks — the exact format the
-robot's speaker expects (docs/protocol.md) — as they're produced. `play()`
-plays a buffer on this computer.
+robot's speaker expects (docs/protocol.md) — as they're produced.
 """
 
 from __future__ import annotations
@@ -25,10 +19,8 @@ import io
 import json
 import os
 import re
-import ssl
 import shutil
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -37,19 +29,12 @@ import urllib.request
 import wave
 from collections.abc import Iterator
 
-import certifi
-
 import numpy as np
 
 from . import config
 
 SAMPLE_RATE = 16_000
 SERVER_RATE_FALLBACK = 24_000   # taken from the reply when a server says PCM rather than WAV
-FISH_TTS_URL = "https://api.fish.audio/v1/tts"
-
-
-def fish_available() -> bool:
-    return bool(config.TTS_VOICE_ID and os.environ.get("FISH_AUDIO_API_KEY"))
 
 
 _server_warned = False
@@ -70,41 +55,14 @@ def voice_server_available() -> bool:
 _MARKUP = re.compile(r"[*_`#~<>\[\]{}|\\]")
 _EMOJI = re.compile("[\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F]")
 
-
-# Drama 3's acting cues (config.TTS_ACTING): a [direction] before the words it changes, and paired tags around words.
-_PAIRED = ("whisper", "emphasis", "soft", "fast", "slow", "stress", "forceful")
-_CUE = re.compile(r"\[[^\[\]]{1,60}\]|</?(?:" + "|".join(_PAIRED) + r")>", re.IGNORECASE)
+# Stage directions a personality's examples may have taught the model to write ([sighs], <whisper>...</whisper>):
+# no voice performs them any more, so they're dropped wherever they turn up.
+_CUE = re.compile(r"\[[^\[\]]{1,60}\]|</?(?:whisper|emphasis|soft|fast|slow|stress|forceful)>", re.IGNORECASE)
 
 
 def without_cues(text: str) -> str:
-    """The words alone, for showing what he said (and for a voice that would read the cues out)."""
-    if not config.TTS_ACTING:
-        return text
+    """The words alone, for showing what he said and for the voice to speak."""
     return re.sub(r"\s+", " ", _CUE.sub(" ", text)).strip()
-
-
-def clean_for_acting(text: str) -> str:
-    """clean_for_tts for a voice that performs cues: keeps the [directions] and paired tags, drops other markup.
-    Each sentence is its own request, so a tag the model opened in one sentence and closed in the next is closed
-    (or reopened) inside each."""
-    keep: list[str] = []
-
-    def stash(m: re.Match) -> str:
-        keep.append(m.group(0).lower() if m.group(0).startswith("<") else m.group(0))
-        return f" \x00{len(keep) - 1}\x00 "
-
-    text = _CUE.sub(stash, text.replace("\x00", ""))   # \x00 marks the kept cues below
-    text = clean_for_tts(text)
-    text = re.sub(r"\x00(\d+)\x00", lambda m: keep[int(m.group(1))], text)
-    for tag in _PAIRED:
-        opens = len(re.findall(f"<{tag}>", text))
-        closes = len(re.findall(f"</{tag}>", text))
-        if closes > opens:
-            text = f"<{tag}>" * (closes - opens) + text
-        elif opens > closes:
-            text = text + f"</{tag}>" * (opens - closes)
-    words = _CUE.sub(" ", text)
-    return text if re.search(r"\w", words) else ""
 
 
 def clean_for_tts(text: str) -> str:
@@ -117,41 +75,6 @@ def clean_for_tts(text: str) -> str:
     if text and text[-1] not in ".!?":
         text += "."
     return text
-
-
-def _fish_stream(text: str) -> Iterator[bytes]:
-    """Raw 16 kHz PCM from Fish Audio, yielded as the server produces it."""
-    body = json.dumps(
-        {
-            "text": text,
-            "reference_id": config.TTS_VOICE_ID,
-            "format": "pcm",          # headerless s16le at sample_rate: nothing to parse
-            "sample_rate": SAMPLE_RATE,
-            "latency": "balanced",    # a little faster to the first byte than "normal"
-            "temperature": config.TTS_TEMPERATURE,
-            "top_p": config.TTS_TOP_P,
-        }
-    ).encode()
-    headers = {
-        "Authorization": f"Bearer {os.environ['FISH_AUDIO_API_KEY']}",
-        "Content-Type": "application/json",
-    }
-    if config.TTS_MODEL:
-        headers["model"] = config.TTS_MODEL   # without it Fish uses its default model, quietly
-    req = urllib.request.Request(FISH_TTS_URL, data=body, method="POST", headers=headers)
-    # python.org builds of Python on macOS don't see the system root certs;
-    # certifi's bundle (already installed with the openai package) does.
-    ctx = ssl.create_default_context(cafile=certifi.where())
-    with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
-        carry = b""  # a chunk boundary can split a 16-bit sample in half
-        while chunk := resp.read(4096):
-            chunk = carry + chunk
-            if len(chunk) % 2:
-                chunk, carry = chunk[:-1], chunk[-1:]
-            else:
-                carry = b""
-            if chunk:
-                yield chunk
 
 
 _SERVER: dict | None = None
@@ -377,7 +300,7 @@ class Equalizer:
 class Leveler:
     """Streaming automatic gain: holds the voice near a steady loudness.
 
-    Fish's level wanders from sentence to sentence and within one, and audio
+    A voice's level wanders from sentence to sentence and within one, and audio
     streams to the speaker as it's made, so it can't be normalized after the
     fact. Each chunk (~130 ms) gets a loudness reading; a smoothed estimate
     follows it upward over ~0.3 s and downward over ~1.5 s, ignoring
@@ -425,16 +348,17 @@ class Leveler:
     @staticmethod
     def equalizer_key() -> str:
         """Which voice this is, for the equalizer's per-voice memory: the speech server's when
-        that's what will speak, Fish's otherwise. Voices sit differently on this speaker, so the
-        two must not share what it has learned about each other. The server's address is normalized
-        so `http://host` and `http://host:80` are the one voice the memory already knows."""
+        that's what will speak, the built-in voice's otherwise. Voices sit differently on this
+        speaker, so the two must not share what it has learned about each other. The server's
+        address is normalized so `http://host` and `http://host:80` are the one voice the memory
+        already knows."""
         if voice_server_available():
             url = urllib.parse.urlsplit(config.TTS_SERVER_URL)
             host, port = (url.hostname or "").lower(), url.port
             default = (url.scheme == "http" and port == 80) or (url.scheme == "https" and port == 443)
             netloc = host if default or port is None else f"{host}:{port}"
             return f"server:{netloc}/{config.TTS_SERVER_VOICE}"
-        return f"{config.TTS_VOICE_ID}/{config.TTS_MODEL}"
+        return "builtin"
 
     def process(self, pcm: bytes) -> bytes:
         """The chunk, leveled. Comes out _Lookahead.SAMPLES (3 ms) late; flush() at the end of a line."""
@@ -572,34 +496,21 @@ class NoBuiltinVoice(RuntimeError):
     """This computer has no speech engine we know how to drive."""
 
 
-# PowerShell script for Windows' built-in speech engine: text on stdin,
-# 16 kHz mono WAV out. Built and tested on macOS; this path is untested.
-_WINDOWS_TTS = """
-Add-Type -AssemblyName System.Speech
-$fmt = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(16000, [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono)
-$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
-$s.SetOutputToWaveFile($args[0], $fmt)
-$s.Speak([Console]::In.ReadToEnd())
-$s.Dispose()
-"""
-
-
 def _synthesize_builtin(text: str) -> bytes:
-    """The computer's own voice as 16 kHz s16le PCM. Text always goes in on
+    """The computer's own voice (espeak-ng) as 16 kHz s16le PCM. Text always goes in on
     stdin, never as an argument, so a reply starting with "-" can't turn
-    into options ("-f /etc/hosts" would make `say` read a file)."""
+    into options ("-f /etc/hosts" would make it read a file)."""
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         path = f.name
     try:
-        if sys.platform == "darwin":
-            cmd = ["say", "-v", config.TTS_FALLBACK_VOICE, "-o", path, "--data-format=LEI16@16000"]
-        elif sys.platform == "win32":
-            cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", _WINDOWS_TTS, path]
-        elif shutil.which("espeak-ng") or shutil.which("espeak"):
-            cmd = [shutil.which("espeak-ng") or "espeak", "--stdin", "-w", path]
-        else:
+        espeak = shutil.which("espeak-ng") or shutil.which("espeak")
+        if not espeak:
             raise NoBuiltinVoice("no built-in voice on this system (install espeak-ng, or set "
-                                 "TTS_SERVER_URL or FISH_AUDIO_API_KEY)")
+                                 "TTS_SERVER_URL)")
+        cmd = [espeak]
+        if config.TTS_FALLBACK_VOICE:
+            cmd += ["-v", config.TTS_FALLBACK_VOICE]   # a voice name is an espeak option: never a file it could read
+        cmd += ["--stdin", "-w", path]
         subprocess.run(cmd, input=text.encode(), check=True, timeout=60)
         with open(path, "rb") as f:
             wav = f.read()
@@ -610,17 +521,11 @@ def _synthesize_builtin(text: str) -> bytes:
 
 def stream(text: str, leveler: Leveler | None = None) -> Iterator[bytes]:
     """Rocky's words as 16 kHz mono s16le PCM chunks, yielded as they're made.
-    Your own speech server when its URL is set, else Fish Audio when it's set up
-    and reachable, else the computer's own voice (all at once). Loudness is
-    steadied by `leveler` (a fresh one if none is given). A saved copy goes to
-    debug/tts/ when DEBUG_SAVE_TTS is on."""
-    voice_server = voice_server_available()
-    # Cues only belong in the text a voice performs them with: Drama 3 acts [sighs] and
-    # <whisper>; a generic speech server reads them out.
-    acting = config.TTS_ACTING and not voice_server
-    plain = clean_for_tts(without_cues(text))   # the built-in voice would read cues out
-    text = clean_for_acting(text) if acting else plain
-    if not text:
+    Your own speech server when its URL is set (else the computer's own voice,
+    all at once). Loudness is steadied by `leveler` (a fresh one if none is
+    given). A saved copy goes to debug/tts/ when DEBUG_SAVE_TTS is on."""
+    plain = clean_for_tts(without_cues(text))
+    if not plain:
         return
     leveler = leveler or Leveler()
     parts: list[bytes] = []
@@ -629,16 +534,13 @@ def stream(text: str, leveler: Leveler | None = None) -> Iterator[bytes]:
         chunks: Iterator[bytes] | None = None
         first = b""
         using = ""
-        for name, available, streamer in (("your speech server", voice_server_available, _server_stream),
-                                          ("fish audio", fish_available, _fish_stream)):
-            if not available() or chunks is not None:
-                continue
+        if voice_server_available():
             try:
-                chunks = streamer(text)
+                chunks = _server_stream(plain)
                 first = next(chunks, b"")
-                using = name
-            except Exception as e:  # network, auth, bad voice id... still speak
-                print(f"({name} failed, using the built-in voice: {e})")
+                using = "your speech server"
+            except Exception as e:  # network, bad voice name... still speak
+                print(f"(your speech server failed, using the built-in voice: {e})")
                 chunks = None
         if chunks is None:
             try:
@@ -665,7 +567,7 @@ def stream(text: str, leveler: Leveler | None = None) -> Iterator[bytes]:
         complete = True
     finally:
         if complete and parts and config.DEBUG_SAVE_TTS:
-            _save_clip(b"".join(parts), text)
+            _save_clip(b"".join(parts), plain)
 
 
 def _save_clip(pcm: bytes, text: str) -> None:
@@ -687,29 +589,3 @@ def _save_clip(pcm: bytes, text: str) -> None:
                 except OSError: pass
     except OSError:
         pass
-
-
-def play(pcm: bytes) -> None:
-    """Play PCM on this computer's default output. Blocks until done.
-
-    On macOS this uses the system player rather than sounddevice: opening an
-    output stream while the mic stream is running trips CoreAudio ("cannot
-    do in current context") and can hang, and afplay is a separate process
-    so it can't. Elsewhere sounddevice plays it directly (untested here)."""
-    if not pcm:
-        return
-    if sys.platform != "darwin":
-        import sounddevice as sd
-        sd.play(np.frombuffer(pcm, dtype=np.int16), SAMPLE_RATE, blocking=True)
-        return
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-        path = f.name
-    try:
-        with wave.open(path, "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(SAMPLE_RATE)
-            w.writeframes(pcm)
-        subprocess.run(["afplay", path], check=False, timeout=60)
-    finally:
-        os.unlink(path)

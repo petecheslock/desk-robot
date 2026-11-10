@@ -20,7 +20,6 @@ class CharacterTests(unittest.TestCase):
                 self.assertTrue(lines.get(key), f"missing the {key} line")
 
     def test_voice_settings(self):
-        self.assertEqual(len(config.TTS_VOICE_ID), 32)
         self.assertIn(f"hey {config.ROBOT_NAME.lower()}", config.WAKE_PHRASES)
         self.assertIn(config.ROBOT_NAME, config.STT_PROMPT)
 

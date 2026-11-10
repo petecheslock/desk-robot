@@ -6,17 +6,19 @@ saved in server/characters/ (git-ignored; export one from the dashboard to share
     {
       "name": "Juniper",                     also the wake word: "hey Juniper"
       "description": "...",                  what you asked for, kept so you can redo the draft
-      "voice_id": "<32 hex>",                a Fish Audio voice (the ID in the voice's page address)
-      "tts_model": "drama-3",                Fish's model: "" = Fish's default (Rocky's), "drama-3" = Drama 3
+      "voice": "juniper",                    the voice's name on your speech server (TTS_SERVER_VOICE;
+                                               empty = the one in server/.env)
       "prompt": "...",                       who they are and how they talk ({human} = your name)
       "examples": "[happy] ...",             example replies, one per line, each starting with an emotion tag
       "lines": {"wake", "sleep", "track_on", "track_off"},   said without asking the language model
       "wake_words": ["hey juniper", ...]     what speech-to-text tends to hear for "hey <name>"
     }
 
-The brain reads the chosen one (settings.json, character.id) once at start; switching restarts it. The robot's
-rules (short spoken replies, the camera, the head, emotion tags) are added by personality.py, so a character only
-says who they are. `draft()` asks the language model to write the long parts from a short description.
+Old files with Fish Audio's voice_id/tts_model keys still load: unknown keys are ignored, a missing voice
+means the .env one. The brain reads the chosen one (settings.json, character.id) once at start; switching
+restarts it. The robot's rules (short spoken replies, the camera, the head, emotion tags) are added by
+personality.py, so a character only says who they are. `draft()` asks the language model to write the long
+parts from a short description.
 Standard library only (the launcher imports it).
 """
 
@@ -31,12 +33,8 @@ from pathlib import Path
 
 DIR = Path(__file__).resolve().parent.parent / "characters"
 DEFAULT = "rocky"
-# Fish Audio models a character can use: "" sends no model header, so Fish picks its default (what Rocky uses).
-TTS_MODELS = ("", "drama-3")
-ACTING_MODELS = ("drama-3",)     # models that perform [directions] and <whisper>...</whisper> instead of reading them
 LINE_KEYS = ("wake", "sleep", "track_on", "track_off")
 _ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
-_VOICE = re.compile(r"[0-9a-f]{32}")
 _NAME = re.compile(r"^[A-Za-z][A-Za-z' -]{0,22}[A-Za-z]$")
 _PHRASE = re.compile(r"^[a-z][a-z' ]{1,38}[a-z]$")
 
@@ -50,12 +48,6 @@ def _text(v, n: int, name: str) -> str:
     if len(v) > n:
         raise ValueError(f"{name} must be at most {n} characters")
     return v
-
-
-def voice_id(v) -> str:
-    """A Fish voice ID from the ID itself or the voice's page address ("" if there's none)."""
-    m = _VOICE.search(str(v or "").lower())
-    return m.group(0) if m else ""
 
 
 def default_wake_words(name: str) -> list[str]:
@@ -72,12 +64,7 @@ def clean(ch) -> dict:
         raise ValueError("a name is 2 to 24 letters (spaces, dashes and apostrophes are fine)")
     if name.lower() == DEFAULT:
         raise ValueError("Rocky is taken: he's the built-in one")
-    vid = voice_id(ch.get("voice_id"))
-    if not vid:
-        raise ValueError("the voice ID is the 32 letters and digits in the voice's address on fish.audio")
-    model = ch.get("tts_model") or ""
-    if model not in TTS_MODELS:
-        raise ValueError(f"voice model must be one of: {', '.join(m or 'default' for m in TTS_MODELS)}")
+    voice = _text(ch.get("voice"), 120, "voice")
     prompt = _text(ch.get("prompt"), 6000, "personality")
     if len(prompt) < 40:
         raise ValueError("the personality needs a few sentences (or press Write it for me)")
@@ -109,8 +96,7 @@ def clean(ch) -> dict:
     return {
         "name": name,
         "description": _text(ch.get("description"), 1000, "description"),
-        "voice_id": vid,
-        "tts_model": model,
+        "voice": voice,
         "prompt": prompt,
         "examples": _text(ch.get("examples"), 3000, "example replies"),
         "lines": lines,
@@ -145,7 +131,7 @@ def name_of(cid: str) -> str:
 
 def list_all() -> list[dict]:
     out = [{"id": DEFAULT, "builtin": True, "character": {
-        "name": "Rocky", "tts_model": "",
+        "name": "Rocky",
         "description": "The Eridian engineer from Project Hail Mary. Built in: his personality is in "
                        "server/brain/personality.py."}}]
     for f in sorted(DIR.glob("*.json")) if DIR.is_dir() else []:
@@ -211,7 +197,7 @@ separately. Expand on the description; don't contradict it.
 examples: 8 to 10 example replies in the character's voice, each one to three short spoken sentences, each \
 starting with exactly one emotion tag in square brackets from this list: EMOTIONS. Use a mix of emotions and \
 everyday desk moments, most under 25 words: a greeting, a bug in some code, late-night work, coffee, a question about what they \
-see, being asked to dance, a small win, a fact they love.ACTING
+see, being asked to dance, a small win, a fact they love.
 
 lines: short lines said without thinking, in their voice: wake (when someone says "hey <name>" and nothing \
 else; one to four words, inviting them to talk), sleep (going to sleep), track_on (starting to follow the \
@@ -221,14 +207,8 @@ wake_words: 4 to 8 lowercase phrases that speech-to-text (Whisper) might write w
 "hey <name>": "hey <name>" itself, "hi <name>", and likely mishearings of the name. Two or more words each, \
 letters and spaces only."""
 
-_ACTING = """ Their voice is generated by an expressive speech model that performs stage directions: a short \
-direction in square brackets right before the words it changes ([sighs], [small laugh], [whispering], \
-[excited, talking fast]) and a few paired tags around words (<whisper>...</whisper>, <emphasis>...</emphasis>, \
-<slow>...</slow>, <fast>...</fast>). Use three or four of these across the examples, at most one per reply, \
-after the emotion tag (like "[happy] [small laugh] ...")."""
 
-
-def draft(name: str, description: str, acting: bool, emotions: list[str],
+def draft(name: str, description: str, emotions: list[str],
           base_url: str, model: str, api_key: str, timeout: float = 60) -> dict:
     """Ask the language model to write the character. Returns {prompt, examples, lines, wake_words}; raises
     ValueError with a message for the dashboard."""
@@ -240,8 +220,7 @@ def draft(name: str, description: str, acting: bool, emotions: list[str],
         raise ValueError("describe the personality in a sentence or two first")
     if not api_key:
         raise ValueError("no LLM_API_KEY in server/.env")
-    system = (_DRAFT_SYSTEM.replace("EMOTIONS", ", ".join(emotions))
-              .replace("ACTING", _ACTING if acting else ""))
+    system = _DRAFT_SYSTEM.replace("EMOTIONS", ", ".join(emotions))
     body = {"model": model, "max_tokens": 3000,
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": f"Name: {name}\nDescription: {description}"}]}
@@ -300,27 +279,34 @@ def _ssl():
         return None
 
 
-def voice_sample(voice: str, model: str, text: str, api_key: str, timeout: float = 30) -> bytes:
-    """A short MP3 of `text` in this voice, for the dashboard's Test voice button."""
-    vid = voice_id(voice)
-    if not vid:
-        raise ValueError("paste the voice ID (or the voice's address on fish.audio) first")
-    if model not in TTS_MODELS:
-        raise ValueError("unknown voice model")
-    if not api_key:
-        raise ValueError("no FISH_AUDIO_API_KEY in server/.env")
+def voice_sample(voice: str, text: str, server_url: str, timeout: float = 30) -> bytes:
+    """A short WAV of `text` in this voice, from the configured speech server, for the dashboard's
+    Test voice button. Works with the brain stopped: the model id is read from the server's
+    /v1/models, the same probe mouth._probe_server does."""
+    base = (server_url or "").rstrip("/")
+    if not base:
+        raise ValueError("no TTS_SERVER_URL in server/.env")
+    voice = _text(voice, 120, "voice")
+    if not voice:
+        raise ValueError("name a voice on your speech server first (TTS_SERVER_VOICE)")
     text = _text(text, 300, "sample text") or "Hello! This is how I sound."
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    if model:
-        headers["model"] = model
-    body = {"text": text, "reference_id": vid, "format": "mp3"}
-    req = urllib.request.Request("https://api.fish.audio/v1/tts", data=json.dumps(body).encode(), method="POST",
-                                 headers=headers)
+    try:
+        req = urllib.request.Request(base + "/v1/models")
+        with urllib.request.urlopen(req, timeout=timeout, context=_ssl()) as r:
+            models = json.loads(r.read()).get("data") or []
+    except (OSError, ValueError) as e:
+        raise ValueError(f"couldn't reach the speech server: {e}")
+    if not models or not models[0].get("id"):
+        raise ValueError("the speech server lists no models (GET /v1/models)")
+    body = json.dumps({"model": models[0]["id"], "voice": voice, "input": text,
+                       "response_format": "wav"}).encode()
+    req = urllib.request.Request(base + "/v1/audio/speech", data=body, method="POST",
+                                 headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=_ssl()) as r:
             return r.read()
     except urllib.error.HTTPError as e:
-        hint = " (check the voice ID)" if e.code in (400, 404) else ""
-        raise ValueError(f"Fish Audio said no (HTTP {e.code}){hint}")
+        hint = " (check the voice's name)" if e.code in (400, 404) else ""
+        raise ValueError(f"the speech server said no (HTTP {e.code}){hint}")
     except OSError as e:
-        raise ValueError(f"couldn't reach Fish Audio: {e}")
+        raise ValueError(f"couldn't reach the speech server: {e}")
