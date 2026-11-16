@@ -8,8 +8,8 @@ brain is stopped. While the brain runs, the live parts of the page (camera, stat
 the brain's own small web server on 127.0.0.1:8767.
 
 Standard library only, and it never touches the camera, the microphone or the robot itself, so it is cheap to leave
-running. One shared CONSOLE_TOKEN gates it like the brain's own server: the page is opened with ?token=<CONSOLE_TOKEN>
-and carries the token as a header after that; a cross-site page can't (it would need a CORS preflight we never grant).
+running. Nothing gates it (fork simplification): POSTs still need an X-Rocky-Console header a cross-site page
+can't send without a CORS preflight we never grant, but whatever can reach the port gets the dashboard.
 
 The brain's output is kept in memory only (for the Log tab), never written to disk, and speech the brain heard but
 ignored (not meant for Rocky) is shown without its words: run `python -m brain.main` in a terminal to see those.
@@ -21,7 +21,6 @@ import collections
 import http.client
 import json
 import os
-import secrets
 import subprocess
 import sys
 import threading
@@ -41,10 +40,6 @@ PORT = int(os.environ.get("ROCKY_DASHBOARD_PORT", "8766"))
 BIND = "127.0.0.1"
 BRAIN_PORT = config.LIVE_VIEW_PORT
 PAGE = HERE / "brain" / "dashboard.html"
-# The token gating this dashboard and the brain behind it (read fresh from server/.env at startup; set CONSOLE_TOKEN
-# there, then restart the launcher to change it). Empty = no token asked (local development).
-CONSOLE_TOKEN = config.CONSOLE_TOKEN
-PUBLIC_HOST = config.PUBLIC_HOST
 
 
 def brain_python() -> str:
@@ -227,8 +222,6 @@ def reload_brain() -> bool:
 
 def brain_request(method: str, path: str, body: bytes | None = None, headers: dict | None = None, timeout: float = 10):
     h = {"Host": f"localhost:{BRAIN_PORT}", **(headers or {})}
-    if CONSOLE_TOKEN:
-        h["X-Rocky-Console-Token"] = CONSOLE_TOKEN   # the brain's console gate, same token
     c = http.client.HTTPConnection("127.0.0.1", BRAIN_PORT, timeout=timeout)
     c.request(method, path, body=body, headers=h)
     return c, c.getresponse()
@@ -242,28 +235,6 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     # ── guards (same rules as the brain's own server) ──
-    def _authorized(self) -> bool:
-        """One shared token gates everything, the page included: it's opened with ?token= and carries
-        the token as a header after that (the tunnel is the only route in, and the token is the real
-        gate; PUBLIC_HOST, when set, is a belt against DNS rebinding)."""
-        if PUBLIC_HOST:
-            host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
-            if host != PUBLIC_HOST:
-                self._json(403, {"error": "forbidden"})
-                return False
-        if not CONSOLE_TOKEN:
-            return True   # no token configured: local development
-        offered = self.headers.get("X-Rocky-Console-Token", "")
-        if not offered:
-            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-            offered = (q.get("token") or [""])[0]
-        if not secrets.compare_digest(offered.encode(), CONSOLE_TOKEN.encode()):
-            self._reply(403, "text/plain",
-                        b"the dashboard needs its token: open this page with ?token=<CONSOLE_TOKEN> "
-                        b"from server/.env")
-            return False
-        return True
-
     def _console(self) -> bool:
         if self.headers.get("X-Rocky-Console") != "1":
             self._json(403, {"error": "not the console"})
@@ -295,14 +266,11 @@ class Handler(BaseHTTPRequestHandler):
 
     # ── routes ──
     def do_GET(self) -> None:
-        if not self._authorized():
-            return
         url = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(url.query)
         if url.path == "/":
             try:
-                page = PAGE.read_text().replace("{name}", active_name()) \
-                                        .replace("{console_token}", json.dumps(CONSOLE_TOKEN)).encode()
+                page = PAGE.read_text().replace("{name}", active_name()).encode()
             except OSError as e:
                 return self._reply(500, "text/plain", f"dashboard page missing: {e}".encode())
             return self._reply(200, "text/html; charset=utf-8", page)
@@ -336,7 +304,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(404, {"error": "not found"})
 
     def do_POST(self) -> None:
-        if not self._authorized() or not self._console():
+        if not self._console():
             return
         path = urllib.parse.urlparse(self.path).path
         try:
@@ -456,8 +424,7 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     srv = ThreadingHTTPServer((BIND, PORT), Handler)
     srv.daemon_threads = True
-    where = f"http://localhost:{PORT}/" + (f"?token={CONSOLE_TOKEN}" if CONSOLE_TOKEN else "")
-    print(f"{config.ROBOT_NAME} dashboard: {where}")
+    print(f"{config.ROBOT_NAME} dashboard: http://localhost:{PORT}/")
     if os.environ.get("ROCKY_START_BRAIN") == "1":
         brain.start()
     try:

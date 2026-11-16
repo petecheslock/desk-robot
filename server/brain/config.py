@@ -59,14 +59,8 @@ LLM_REASONING = False
 PORT = 8765
 
 # The console (dashboard + live view + controls), reached through a Tailscale/ssh tunnel from your own
-# machine. One shared token gates it (same style as ROBOT_TOKEN): the browser opens the page with
-# ?token=<CONSOLE_TOKEN> and keeps it in memory for the requests that follow. Required whenever
-# LIVE_VIEW_BIND isn't loopback-only; with loopback-only binding (local development) it can stay empty.
-#   CONSOLE_TOKEN  at least 16 random characters, e.g. `python3 -c "import secrets; print(secrets.token_hex(16))"`
-#   PUBLIC_HOST    optional belt against DNS rebinding: when set, requests whose Host header doesn't
-#                  name it are refused. Leave empty to accept any Host (the token is the real gate).
-CONSOLE_TOKEN = os.environ.get("CONSOLE_TOKEN", "").strip()
-PUBLIC_HOST = (os.environ.get("PUBLIC_HOST") or "").strip().lower()
+# machine. Ungated for now (fork simplification): whatever can reach the port can use the console.
+# Re-add a token before exposing these ports beyond your own tunnel.
 
 # Rocky's voice and how much he says. The character itself (system prompt,
 # canned lines) is in personality.py.
@@ -212,8 +206,7 @@ LIVE_VIEW_PORT = 8767   # the brain's own page + API. The launcher (server/launc
                         # and passes these through; without the launcher, open this port directly
 LIVE_VIEW_BIND = os.environ.get("LIVE_VIEW_BIND") or "0.0.0.0"  # all interfaces: inside the container the port
                              # mapping is the exposure, and the console is reached through a tunnel. Local
-                             # development: set 127.0.0.1 in server/.env (then CONSOLE_TOKEN may stay empty).
-                             # Either way the console answers only with the token.
+                             # development: set 127.0.0.1 in server/.env.
 SEND_CAMERA_TO_BRAIN = True  # let Rocky see the camera at all (False = no picture ever goes to the model)
 # Seeing better (dashboard: Settings > Vision).
 #   VISION_EVERY_QUESTION  attach the camera's picture to every question while he's awake, not only ones about

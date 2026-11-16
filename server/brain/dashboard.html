@@ -1363,16 +1363,11 @@ const FaceKit = (() => {
   const history = [];
 
   // ── helpers ────────────────────────────────────────────────────────────
-  // The console token, injected by the server that served this page ("" when it doesn't use one).
-  // Kept in memory only: the page was opened with ?token=, and everything after that carries it
-  // as a header (the camera stream, an <img>, keeps it in its URL).
-  const TOKEN = {console_token};
-  const tokenHeaders = () => TOKEN ? { "X-Rocky-Console-Token": TOKEN } : {};
   async function fget(url) {
-    return fetch(url, { headers: tokenHeaders() });
+    return fetch(url);
   }
   async function post(path, body) {
-    const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Rocky-Console": "1", ...tokenHeaders() }, body: JSON.stringify(body || {}) });
+    const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Rocky-Console": "1" }, body: JSON.stringify(body || {}) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || r.statusText);
     return j;
@@ -1475,7 +1470,7 @@ const FaceKit = (() => {
   let streaming = false;
   function updateStream() {
     const want = server.running && liveTab();
-    if (want && !streaming) { $("cam").src = "/stream?" + (TOKEN ? "token=" + encodeURIComponent(TOKEN) + "&" : "") + Date.now(); streaming = true; }
+    if (want && !streaming) { $("cam").src = "/stream?" + Date.now(); streaming = true; }
     if (!want && streaming) { $("cam").removeAttribute("src"); streaming = false; }
   }
   $("cam").addEventListener("error", () => { streaming = false; setTimeout(updateStream, 2000); });
@@ -1757,7 +1752,7 @@ const FaceKit = (() => {
   tick();
 
   // ── browser A/V: this browser stands in for the robot while it's away ───
-  // One console WebSocket to the brain's robot port (hello_console + CONSOLE_TOKEN): the mic goes up
+  // One console WebSocket to the brain's robot port (hello_console): the mic goes up
   // as \x01+16 kHz PCM exactly like the robot's, the voice comes back the same way, and the webcam's
   // JPEGs are POSTed to /api/browser_frame. The robot's A/V always wins: it sends `av_taken` and the
   // devices are let go (a fresh user gesture is needed to take them back, so no prompt loops).
@@ -1886,7 +1881,7 @@ const FaceKit = (() => {
         return reject(new Error("browser A/V needs the tunnel to carry the brain's port 8765 (ws://) — see the README"));
       const ws = new WebSocket(`ws://${location.hostname}:8765`);
       let ok = false;
-      ws.onopen = () => ws.send(JSON.stringify({ type: "hello_console", token: TOKEN }));
+      ws.onopen = () => ws.send(JSON.stringify({ type: "hello_console" }));
       ws.onmessage = ev => {
         if (typeof ev.data !== "string") {   // \x01 + 16 kHz PCM: Rocky's voice, on the jitter buffer
           if (ev.data instanceof ArrayBuffer && new Uint8Array(ev.data)[0] === 1) avPlay(ev.data.slice(1));
@@ -1896,7 +1891,7 @@ const FaceKit = (() => {
         if (m.type === "console_ok") { ok = true; resolve(ws); }
         if (m.type === "av_taken") { avLetGo(); toast("The robot's mic and camera took over"); avRender(status); }
       };
-      ws.onclose = () => { if (av.ws === ws) { av.ws = null; avLetGo(); avRender(status); } if (!ok) reject(new Error("the brain refused this browser (check CONSOLE_TOKEN)")); };
+      ws.onclose = () => { if (av.ws === ws) { av.ws = null; avLetGo(); avRender(status); } if (!ok) reject(new Error("the brain refused this browser")); };
       ws.onerror = () => { if (!ok) reject(new Error("couldn't reach the brain's port 8765")); };
       av.ws = ws;
       ws.binaryType = "arraybuffer";
@@ -1935,7 +1930,7 @@ const FaceKit = (() => {
         c2d.drawImage(video, 0, 0, 640, 480);
         canvas.toBlob(b => {
           if (b) fetch("/api/browser_frame", { method: "POST",
-            headers: { ...tokenHeaders(), "X-Rocky-Console": "1", "Content-Type": "image/jpeg" }, body: b }).catch(() => {});
+            headers: { "X-Rocky-Console": "1", "Content-Type": "image/jpeg" }, body: b }).catch(() => {});
         }, "image/jpeg", 0.85);
       }, 200);   // ~5 pictures a second, like the robot's stream
       av.ws.send(JSON.stringify({ type: "av_state", mic: stream.getAudioTracks()[0]?.label || "",
@@ -2590,7 +2585,7 @@ const FaceKit = (() => {
     const text = first || `Hi! I'm ${ch.name || "your new robot"}. This is how I sound.`;
     b.disabled = true; b.textContent = "Loading…";
     try {
-      const r = await fetch("/launcher/characters/voice", { method: "POST", headers: { "Content-Type": "application/json", "X-Rocky-Console": "1", ...tokenHeaders() },
+      const r = await fetch("/launcher/characters/voice", { method: "POST", headers: { "Content-Type": "application/json", "X-Rocky-Console": "1" },
                                                            body: JSON.stringify({ voice: ch.voice, text }) });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
       if (sample) { sample.pause(); URL.revokeObjectURL(sample.src); }

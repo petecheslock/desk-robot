@@ -1,8 +1,9 @@
 # Robot ↔ brain WebSocket protocol (v0)
 
 The robot connects to `ws://<mac-ip>:8765`. The first message must be a
-`hello` carrying the shared `ROBOT_TOKEN` (server/.env, firmware secrets.h);
-the server drops anything else without replying, and allows one robot at a
+`hello`; the firmware still fills its `token` field, but the server stopped
+checking it (fork simplification — ungated LAN link). The server drops
+anything that isn't a `hello` without replying, and allows one robot at a
 time. Plain `ws://` on the home LAN, no TLS. Text frames are JSON. Binary
 frames start with one type byte: `0x01` = mic audio, `0x02` = camera JPEG,
 `0x03` = a sharp still. The rest of the frame is the payload.
@@ -10,7 +11,7 @@ frames start with one type byte: `0x01` = mic audio, `0x02` = camera JPEG,
 ## Robot → server
 
 ```json
-{"type": "hello", "who": "desk-robot", "fw": "0.4.3", "token": "...",   // must be the first message; token = ROBOT_TOKEN
+{"type": "hello", "who": "desk-robot", "fw": "0.4.3", "token": "...",   // must be the first message; token sent by the firmware, ignored by the server
  "boot": "power on", "up_s": 3600, "rssi": -58, "tx_low": true,
  "wifi_drops": 1, "link_drops": 2, "drop_reason": 200, "drop_ago_s": 900, "down_s": 4.2,
  "stall_ms": 0, "face_gap_ms": 0}

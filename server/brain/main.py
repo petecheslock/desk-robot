@@ -35,13 +35,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import ipaddress
 import json
 import math
 import os
 import queue
 import re
-import secrets
 import sys
 import threading
 import time
@@ -80,8 +78,6 @@ def _browser_state() -> dict:
             "mic_fps": round(len(browser_mic_times) / 2.0, 1)}
 _greeting = 0                      # connections still saying hello (each may hold a message for up to 2 s)
 MAX_GREETING = 8
-MIN_TOKEN_LEN = 16
-_bad_token = asyncio.Lock()        # wrong tokens wait out their second one at a time, however many come at once
 brain: RobotBrain | None = None  # created in main() once the event loop exists
 ears: Ears | None = None
 # (text, when speech began, when it ended, when the transcript was ready)
@@ -202,7 +198,7 @@ def robot_health(hello: dict) -> str:
 
 async def handle_socket(websocket: websockets.ServerConnection) -> None:
     """One connection to the robot port: the robot's, or the dashboard's browser standing in for it.
-    The first message says which (a `hello` with ROBOT_TOKEN, or a `hello_console` with CONSOLE_TOKEN)."""
+    The first message says which (a `hello` from the robot, a `hello_console` from a browser)."""
     global _greeting
     peer = websocket.remote_address[0] if websocket.remote_address else "?"
     if _greeting >= MAX_GREETING:      # a flood of connections that never say hello
@@ -230,34 +226,22 @@ async def handle_robot(websocket: websockets.ServerConnection, hello: dict, peer
     global robot_socket, roam_moving_until, robot_peer, robot_heard_at
     # The robot's WebSocket library always sends "Origin: file://"; a browser always sends its page's
     # origin. Accepting only that (or none) keeps web pages from connecting and posing as the robot —
-    # the browser has its own hello, with its own token, below.
+    # the browser has its own hello below. The token check is gone (fork simplification): anything on
+    # this port that says `hello` is taken for the robot; keep 8765 on the LAN, not the open internet.
     origin = websocket.request.headers.get("Origin")
     if origin not in (None, "file://"):
         print(f"(refused a connection from {peer}: not the robot)")
         await websocket.close(1008)
         return
-    # Anyone on the WiFi can reach this port, so the first message must be a
-    # hello carrying the shared token from server/.env. Anything else is
-    # dropped without a reply.
-    expected = os.environ.get("ROBOT_TOKEN", "")
-    if len(expected) < MIN_TOKEN_LEN or expected == "change-me":   # the example's placeholder: everyone knows it
-        print(f"(refusing robot: set ROBOT_TOKEN in server/.env and firmware/include/secrets.h to the same random "
-              f"string of at least {MIN_TOKEN_LEN} characters, e.g. from "
-              f"`python3 -c \"import secrets; print(secrets.token_hex(16))\"`)")
-        await websocket.close(1008)
-        return
-    offered = str(hello.get("token", "")).encode()  # bytes: compare_digest rejects non-ASCII str
-    if hello.get("type") != "hello" or not secrets.compare_digest(offered, expected.encode()):
-        print(f"(refused a connection from {peer}: bad or missing token)")
-        async with _bad_token:   # a wrong token costs a second, one at a time: no rapid guessing in parallel
-            await asyncio.sleep(1)
+    if hello.get("type") != "hello":
+        print(f"(refused a connection from {peer}: no hello)")
         await websocket.close(1008)
         return
     if robot_socket is not None:
         # The robot back after a reboot or a replug, before its old connection is noticed as dead (that takes up to
         # ~40 s of missed pings). Refusing it left the robot retrying until then, so it takes over: if it comes from
         # the same address, or the old link has gone quiet (a live robot sends something every few seconds).
-        # Anything else is a second robot (or someone else with the token) and is refused, as before.
+        # Anything else is a second robot and is refused, as before.
         if peer != robot_peer and time.time() - robot_heard_at < 8:
             print(f"(refused a second robot from {peer}: one is already connected)")
             await websocket.close(1013)
@@ -347,23 +331,8 @@ async def handle_console(websocket: websockets.ServerConnection, hello: dict, pe
     and its webcam is the camera (POST /api/browser_frame). One at a time, and never while the robot
     is connected (a live robot's A/V always wins; the browser is told to let go with `av_taken`)."""
     global browser_socket, browser_devices
-    expected = config.CONSOLE_TOKEN
-    offered = str(hello.get("token", "")).encode()
-    try:
-        local = ipaddress.ip_address(peer.split("%")[0]).is_loopback
-    except ValueError:
-        local = False
-    if not expected:
-        if not local:   # loopback-only consoles without a token: local development
-            print(f"(refused a browser console from {peer}: set CONSOLE_TOKEN in server/.env)")
-            await websocket.close(1008)
-            return
-    elif not secrets.compare_digest(offered, expected.encode()):
-        print(f"(refused a browser console from {peer}: bad or missing token)")
-        async with _bad_token:
-            await asyncio.sleep(1)
-        await websocket.close(1008)
-        return
+    # No token gate any more (fork simplification): the rules that remain are one browser at a time,
+    # and a live robot always wins.
     if robot_socket is not None:
         print(f"(refused a browser console from {peer}: the robot is connected — its mic and camera are in use)")
         await websocket.close(1013)
@@ -1681,12 +1650,8 @@ async def main() -> None:
     eyes.state_provider = console_state
     eyes.command_handler = console_command
     eyes.serve(config.LIVE_VIEW_PORT, config.LIVE_VIEW_BIND)
-    if config.CONSOLE_TOKEN:
-        where = f"http://localhost:{config.LIVE_VIEW_PORT}/?token=<CONSOLE_TOKEN>"
-        print(f"live view + controls: {where}  (token-gated; the launcher's dashboard on :8766 adds settings "
-              f"and a Start button)")
-    if not os.environ.get("ROBOT_TOKEN"):
-        print("WARNING: ROBOT_TOKEN is not set in server/.env — the robot will be refused")
+    print(f"live view + controls: http://localhost:{config.LIVE_VIEW_PORT}/  (the launcher's dashboard on :8766 "
+          f"adds settings and a Start button)")
     if not mouth.voice_server_available() and config.TTS_SERVER_URL:
         print("WARNING: TTS_SERVER_URL is set but TTS_SERVER_VOICE isn't — the speech server is skipped "
               "(GET /v1/audio/voices on it lists its voices)")
@@ -1719,7 +1684,7 @@ async def main() -> None:
     print("type `ask <question>` to talk to the brain right now\n")
     # The robot's and the dashboard browser's connections both land here (handle_socket): the robot's
     # hello must carry "Origin: file://" (checked in handle_robot — a browser can't say that), the
-    # browser's its own token (handle_console).
+    # browser says hello_console (handle_console).
     async with websockets.serve(handle_socket, "0.0.0.0", config.PORT, max_size=1024 * 1024):  # snapshots ~40-300 KB
         voice_task = asyncio.create_task(voice_loop())
         doze_task = asyncio.create_task(doze_loop())

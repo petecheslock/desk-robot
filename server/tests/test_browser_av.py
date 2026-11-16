@@ -1,10 +1,11 @@
-"""The browser standing in for the robot while it's offline: the console WebSocket's hello and
-token, the handover when the real robot connects, and which mic he listens through. Real
-WebSockets on a scratch port, so the framing is exercised too."""
+"""The browser standing in for the robot while it's offline: the console WebSocket's hello, the
+handover when the real robot connects, and which mic he listens through. Real WebSockets on a
+scratch port, so the framing is exercised too. Neither hello carries a token any more (fork
+simplification) — what still gates: a robot hello must come from a non-browser origin, a browser
+hello must not be a robot hello."""
 
 import asyncio
 import json
-import os
 import unittest
 from unittest.mock import patch
 
@@ -36,34 +37,31 @@ class FakeEars:
 
 
 class BrowserAVTests(unittest.TestCase):
-    TOKEN = "console-token-console-token"
-    ROBOT_TOKEN = "robot-token-robot-token"
-
     def setUp(self):
-        self.saved = (config.CONSOLE_TOKEN, main.robot_socket, main.browser_socket, main.browser_devices,
+        self.saved = (main.robot_socket, main.browser_socket, main.browser_devices,
                       config.MIC_SOURCE, main.ears, main.current_settings)
         self.prints = patch("builtins.print")
         self.prints.start()
 
     def tearDown(self):
         self.prints.stop()
-        (config.CONSOLE_TOKEN, main.robot_socket, main.browser_socket, main.browser_devices,
+        (main.robot_socket, main.browser_socket, main.browser_devices,
          config.MIC_SOURCE, main.ears, main.current_settings) = self.saved
         main.browser_mic_times.clear()
 
     def run_async(self, coro):
         return asyncio.run(coro)
 
-    # ── the hello and its token ──────────────────────────────────────────────
+    # ── the hello ────────────────────────────────────────────────────────────
     async def _serve(self):
         server = await websockets.serve(main.handle_socket, "127.0.0.1", 0, max_size=1024 * 1024)
         port = server.sockets[0].getsockname()[1]
         return server, port
 
-    async def _hello_console(self, port, token=TOKEN, extra=None):
+    async def _hello_console(self, port, extra=None):
         """Connect, say hello_console, return (websocket_or_None, first_message_or_close_reason)."""
         ws = await websockets.connect(f"ws://127.0.0.1:{port}", origin="http://localhost:8766")
-        hello = {"type": "hello_console", "token": token, **(extra or {})}
+        hello = {"type": "hello_console", **(extra or {})}
         try:
             await ws.send(json.dumps(hello))
             first = await asyncio.wait_for(ws.recv(), timeout=3)
@@ -75,28 +73,12 @@ class BrowserAVTests(unittest.TestCase):
         async def go():
             server, port = await self._serve()
             try:
-                with patch.object(config, "CONSOLE_TOKEN", self.TOKEN):
-                    ws, first = await self._hello_console(port, extra={"mic": "MacBook mic", "camera": "FaceTime"})
-                    self.assertIsNotNone(ws)
-                    self.assertEqual(json.loads(first)["type"], "console_ok")
-                    self.assertEqual(main.browser_devices["mic"], "MacBook mic")
-                    self.assertEqual(main.browser_devices["camera"], "FaceTime")
-                    await ws.close()
-            finally:
-                server.close()
-                await server.wait_closed()
-        self.run_async(go())
-
-    def test_a_bad_or_missing_token_is_refused(self):
-        async def go():
-            server, port = await self._serve()
-            try:
-                with patch.object(config, "CONSOLE_TOKEN", self.TOKEN):
-                    for bad in ("", "wrong-token-wrong-token", self.ROBOT_TOKEN):
-                        with self.subTest(token=bad):
-                            ws, code = await self._hello_console(port, bad)
-                            self.assertIsNone(ws)
-                            self.assertEqual(code, 1008)
+                ws, first = await self._hello_console(port, extra={"mic": "MacBook mic", "camera": "FaceTime"})
+                self.assertIsNotNone(ws)
+                self.assertEqual(json.loads(first)["type"], "console_ok")
+                self.assertEqual(main.browser_devices["mic"], "MacBook mic")
+                self.assertEqual(main.browser_devices["camera"], "FaceTime")
+                await ws.close()
             finally:
                 server.close()
                 await server.wait_closed()
@@ -106,13 +88,12 @@ class BrowserAVTests(unittest.TestCase):
         async def go():
             server, port = await self._serve()
             try:
-                with patch.object(config, "CONSOLE_TOKEN", self.TOKEN):
-                    first, _ = await self._hello_console(port)
-                    self.assertIsNotNone(first)
-                    second, code = await self._hello_console(port)
-                    self.assertIsNone(second)
-                    self.assertEqual(code, 1013)
-                    await first.close()
+                first, _ = await self._hello_console(port)
+                self.assertIsNotNone(first)
+                second, code = await self._hello_console(port)
+                self.assertIsNone(second)
+                self.assertEqual(code, 1013)
+                await first.close()
             finally:
                 server.close()
                 await server.wait_closed()
@@ -122,12 +103,11 @@ class BrowserAVTests(unittest.TestCase):
         async def go():
             server, port = await self._serve()
             try:
-                with patch.dict(os.environ, {"ROBOT_TOKEN": self.ROBOT_TOKEN}):
-                    ws = await websockets.connect(f"ws://127.0.0.1:{port}", origin="http://evil.example")
-                    await ws.send(json.dumps({"type": "hello", "token": self.ROBOT_TOKEN}))
-                    with self.assertRaises(websockets.ConnectionClosed) as closed:
-                        await ws.recv()
-                    self.assertEqual(closed.exception.rcvd.code, 1008)
+                ws = await websockets.connect(f"ws://127.0.0.1:{port}", origin="http://evil.example")
+                await ws.send(json.dumps({"type": "hello"}))
+                with self.assertRaises(websockets.ConnectionClosed) as closed:
+                    await ws.recv()
+                self.assertEqual(closed.exception.rcvd.code, 1008)
             finally:
                 server.close()
                 await server.wait_closed()
@@ -139,29 +119,27 @@ class BrowserAVTests(unittest.TestCase):
             server, port = await self._serve()
             main.ears = FakeEars()   # so the mic source has somewhere to land
             try:
-                with patch.object(config, "CONSOLE_TOKEN", self.TOKEN), \
-                        patch.dict(os.environ, {"ROBOT_TOKEN": self.ROBOT_TOKEN}):
-                    browser, first = await self._hello_console(port)
-                    self.assertIsNotNone(browser)
-                    # the robot connects with a proper hello (a browser origin, unlike the robot's)
-                    robot = await websockets.connect(f"ws://127.0.0.1:{port}", origin="file://")
-                    await robot.send(json.dumps({"type": "hello", "token": self.ROBOT_TOKEN, "fw": "0.4.4"}))
-                    # the browser is told to let go, and keeps its connection for when the robot leaves
-                    msg = await asyncio.wait_for(browser.recv(), timeout=3)
-                    self.assertEqual(json.loads(msg)["type"], "av_taken")
-                    self.assertIsNotNone(main.robot_socket)
-                    # the robot's mic is live now, not the browser's
-                    self.assertEqual(self._mic_source(), "robot")
-                    # a browser that tries to (re)connect while the robot is live is refused
-                    again, code = await self._hello_console(port)
-                    self.assertIsNone(again)
-                    self.assertEqual(code, 1013)
-                    # the robot leaves: the browser's session is still there, and its mic is back
-                    await robot.close()
-                    await asyncio.sleep(0.1)
-                    self.assertIsNone(main.robot_socket)
-                    self.assertEqual(self._mic_source(), "browser")
-                    await browser.close()
+                browser, first = await self._hello_console(port)
+                self.assertIsNotNone(browser)
+                # the robot connects with a proper hello (a browser origin, unlike the robot's)
+                robot = await websockets.connect(f"ws://127.0.0.1:{port}", origin="file://")
+                await robot.send(json.dumps({"type": "hello", "fw": "0.4.4"}))
+                # the browser is told to let go, and keeps its connection for when the robot leaves
+                msg = await asyncio.wait_for(browser.recv(), timeout=3)
+                self.assertEqual(json.loads(msg)["type"], "av_taken")
+                self.assertIsNotNone(main.robot_socket)
+                # the robot's mic is live now, not the browser's
+                self.assertEqual(self._mic_source(), "robot")
+                # a browser that tries to (re)connect while the robot is live is refused
+                again, code = await self._hello_console(port)
+                self.assertIsNone(again)
+                self.assertEqual(code, 1013)
+                # the robot leaves: the browser's session is still there, and its mic is back
+                await robot.close()
+                await asyncio.sleep(0.1)
+                self.assertIsNone(main.robot_socket)
+                self.assertEqual(self._mic_source(), "browser")
+                await browser.close()
             finally:
                 server.close()
                 await server.wait_closed()
@@ -178,21 +156,20 @@ class BrowserAVTests(unittest.TestCase):
             ears = FakeEars()
             main.ears = ears
             try:
-                with patch.object(config, "CONSOLE_TOKEN", self.TOKEN):
-                    ws, _ = await self._hello_console(port)
-                    self.assertIsNotNone(ws)
-                    self.assertEqual(ears.source, "browser")   # picked on connect
-                    pcm = sample_pcm()
-                    await ws.send(b"\x01" + pcm)
-                    await asyncio.sleep(0.2)
-                    self.assertEqual(ears.pushed, [(pcm, "browser")])
-                    # a frame split mid-sample (even length), or not mic audio, is dropped whole
-                    ears.pushed.clear()
-                    await ws.send(b"\x01\x02")
-                    await ws.send(b"\x02" + pcm)
-                    await asyncio.sleep(0.2)
-                    self.assertEqual(ears.pushed, [])
-                    await ws.close()
+                ws, _ = await self._hello_console(port)
+                self.assertIsNotNone(ws)
+                self.assertEqual(ears.source, "browser")   # picked on connect
+                pcm = sample_pcm()
+                await ws.send(b"\x01" + pcm)
+                await asyncio.sleep(0.2)
+                self.assertEqual(ears.pushed, [(pcm, "browser")])
+                # a frame split mid-sample (even length), or not mic audio, is dropped whole
+                ears.pushed.clear()
+                await ws.send(b"\x01\x02")
+                await ws.send(b"\x02" + pcm)
+                await asyncio.sleep(0.2)
+                self.assertEqual(ears.pushed, [])
+                await ws.close()
             finally:
                 server.close()
                 await server.wait_closed()

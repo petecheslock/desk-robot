@@ -265,15 +265,13 @@ Open `server/.env` and fill in:
 - `LLM_API_KEY`: your OpenRouter key. (For Anthropic or OpenAI instead, see
   [Change the model or provider](#change-the-model-or-provider).)
 - `HUMAN_NAME`: what Rocky should call you.
-- `ROBOT_TOKEN`: any random string. The robot will need the same one. Make
-  one with `python3 -c "import secrets; print(secrets.token_hex(16))"`.
 - `TTS_SERVER_URL` and `TTS_SERVER_VOICE`: optional, your own [speech
   server](#change-the-voice) — Rocky's voice.
 - `OPENAI_API_KEY`: optional, for [focus mode](#focus-mode).
 
 For local development, also set `LIVE_VIEW_BIND=127.0.0.1` in
 `server/.env` (the fork's default binds all interfaces for the
-container): with a loopback-only bind the console needs no token.
+container).
 
 Then start the dashboard, from the `server` folder:
 
@@ -301,8 +299,7 @@ Log tab has one).
 
 ### The dashboard
 
-<http://localhost:8766/> has five tabs (opened through the tunnel with
-`?token=<CONSOLE_TOKEN>` on a server):
+<http://localhost:8766/> has five tabs:
 
 - **Live**: what Rocky sees and hears, the last exchange, and buttons for
   his head, face, sleep, words to say, and a focus session. **Start server**, **Restart** and
@@ -337,10 +334,9 @@ without settings or server buttons.
 The intended setup runs the brain on a remote Linux box
 (see [Run the brain in a container](#run-the-brain-in-a-container)); the
 dashboard is reached from your own machine through a Tailscale or ssh
-tunnel, and one shared `CONSOLE_TOKEN` in `server/.env` gates it — the page,
-the camera, the controls, everything. Open it as
-`http://localhost:8766/?token=<CONSOLE_TOKEN>`; the page keeps the token in
-memory for the requests that follow.
+tunnel. Nothing gates the console in this fork (token removal, for
+simplicity): the tunnel is the only route in, and whoever has it gets the
+page, the camera and the controls. Open `http://localhost:8766/`.
 
 With an ssh tunnel:
 
@@ -350,15 +346,12 @@ ssh -L 8766:localhost:8766 -L 8767:localhost:8767 -L 8765:localhost:8765 <host>
 
 8766 is the dashboard, 8767 the brain's own live view, and 8765 the robot
 port — the browser's stand-in mic and speaker (the Live view's "Use this
-browser as mic and camera") connect to it as a second WebSocket, gated by
-the same `CONSOLE_TOKEN`.
+browser as mic and camera") connect to it as a second WebSocket.
 
 With Tailscale, `tailscale serve` can do the same on the tailnet. The
-tunnel provides the privacy (plain http is fine — and needed: `getUserMedia`
-for the browser mic/camera only works in a secure context, which
-`http://localhost` counts as); `CONSOLE_TOKEN` is the gate.
-`PUBLIC_HOST` in `server/.env` can additionally pin the Host header the
-console answers to.
+tunnel provides the privacy and is the whole gate (plain http is fine — and
+needed: `getUserMedia` for the browser mic/camera only works in a secure
+context, which `http://localhost` counts as).
 
 ## Run the brain in a container
 
@@ -381,10 +374,11 @@ journalctl --user -u desk-robot -f                     # the brain's console
 ```
 
 `deploy/desk-robot.container` publishes the robot's port 8765 on the LAN
-(`ROBOT_TOKEN` gates it) and the console ports 8766/8767 on loopback only —
-reach them through the [tunnel](#reach-the-dashboard-from-another-machine-the-tunnel)
-with `CONSOLE_TOKEN`. Personalities, face packs and the model cache live in
-named volumes, so they survive image rebuilds.
+(ungated in this fork: whatever can reach it and says `hello` becomes the
+robot) and the console ports 8766/8767 on loopback only — reach them
+through the [tunnel](#reach-the-dashboard-from-another-machine-the-tunnel).
+Personalities, face packs and the model cache live in named volumes, so
+they survive image rebuilds.
 
 The first start downloads about 200 MB of models (the speech model's commit
 is pinned in `brain/config.py`, `STT_REVISION`) into the cache volume — it
@@ -393,9 +387,10 @@ build the image on a machine that has them in `~/.cache`, or add the
 downloads to the Containerfile before the `USER rocky` line.
 
 Then point the robot at the server: `BRAIN_HOST` in
-`firmware/include/secrets.h` is the server's LAN IP, `ROBOT_TOKEN` the same
-string as `~/.config/desk-robot/.env`. The protocol is unchanged — an
-existing robot only needs that one line edited and a re-flash.
+`firmware/include/secrets.h` is the server's LAN IP. `ROBOT_TOKEN` is still
+sent by the firmware but ignored by the server; keep whatever value is in
+`secrets.h`. The protocol is unchanged — an existing robot only needs that
+one line edited and a re-flash.
 
 The brain's stdin console stays available in the container for the raw
 console commands: `podman exec -it desk-robot python -m brain.main` runs a
@@ -415,9 +410,9 @@ second one alongside (or read the launcher's output with `journalctl`).
    not change.
 
 2. Copy `firmware/include/secrets.h.example` to `secrets.h` in the same
-   folder and fill in your WiFi name and password, that address, and
-   the same `ROBOT_TOKEN` you put in `server/.env`. The ESP32 only sees
-   **2.4 GHz** networks.
+   folder and fill in your WiFi name and password and that address
+   (`ROBOT_TOKEN` can be anything: the server ignores it now). The ESP32
+   only sees **2.4 GHz** networks.
 
 3. Flash again with `pio run -t upload`. The serial console shows
    `wifi: connected` and then `brain: connected` once the server is running.
@@ -757,10 +752,11 @@ what Rocky is told he can do. A different screen driver goes near the top of
 - **`wifi: joining` forever.** The network is 5 GHz only, or the antenna is
   not clipped on. Make a 2.4 GHz network or band.
 - **The robot prints `brain: connected` then `brain: disconnected, will
-  retry` every few seconds.** `ROBOT_TOKEN` differs between `server/.env`
-  and `secrets.h`. The server console shows the refusal. If it never gets
-  to `brain: connected`, the computer's address changed or the server is
-  not running.
+  retry` every few seconds.** Something else on the network is connecting
+  as a robot and taking the slot (the port is ungated in this fork), or
+  the robot's WiFi drops. The server console shows each connect and
+  refusal. If it never gets to `brain: connected`, the computer's address
+  changed or the server is not running.
 - **He never hears you through the browser.** The Live view's status line
   shows the browser mic's frame rate ("standing in · mic 10/s"): 0/s with
   the camera working means the browser isn't sending audio — check the
@@ -828,23 +824,22 @@ python -m pytest tests -q        # or: python -m unittest tests/test_*.py
   `firmware/include/secrets.h`. Never commit them, and do not share
   `firmware/.pio/` build output either: the compiled binary contains your
   WiFi password.
-- **Only your robot can talk to the brain.** The WebSocket port is open on
-  your LAN, but the first message must carry `ROBOT_TOKEN`; wrong ones cost
-  a second each, one at a time, and a token shorter than 16 characters (or
-  the example's `change-me`) is refused, so pick your own random string.
-  Web pages can't connect at all (the robot's connection has an origin no
-  browser can send). One robot at a time: a reconnect replaces the old
-  connection only from the same address or once the old one has gone
-  quiet. The token travels unencrypted on your WiFi, so treat a guest
-  network as untrusted.
-- **The console (dashboard, live view, controls) is gated by one shared
-  token.** `CONSOLE_TOKEN` in `server/.env`: the page opens with
-  `?token=<it>` and carries it as a header after that, and controls also
-  need a custom header a cross-site page can't send. The console ports are
-  published on loopback only — reached through an ssh/Tailscale tunnel,
-  which provides the privacy (plain http is fine); the token is the gate.
-  In local development (loopback bind, no token) it answers this computer
-  only, and other user accounts on it can open it too.
+- **The robot link is ungated in this fork.** The token checks (`ROBOT_TOKEN`
+  for the robot, `CONSOLE_TOKEN` for the console) were removed to simplify
+  the remote-container setup: anything on your LAN that says `hello` becomes
+  the robot, and anything that reaches 8766/8767 gets the dashboard. What
+  still holds: web pages can't pose as the robot (its connection has an
+  origin no browser can send), controls need a custom header a cross-site
+  page can't send, one robot at a time (a reconnect replaces the old
+  connection only from the same address or once it has gone quiet), and one
+  browser standing in at a time. The boundary is now the network: keep
+  these ports on your LAN and the ssh/Tailscale tunnel, and re-add gates
+  before exposing them anywhere else.
+- **The console (dashboard, live view, controls) follows the same deal.**
+  The console ports are published on loopback only — reached through an
+  ssh/Tailscale tunnel, which is the whole gate (plain http is fine; that's
+  also what makes `getUserMedia` work). In local development it answers this
+  computer only, and other user accounts on it can open it too.
 - **Voice is unauthenticated by design.** Anyone in earshot can say "hey
   Rocky". All he can do is move his head and spend a fraction of a cent.
   With an OpenAI key, anyone can also start a focus session, which sends
@@ -880,7 +875,8 @@ python -m pytest tests -q        # or: python -m unittest tests/test_*.py
   you turn on `DEBUG_SAVE_TTS` or `DEBUG_SAVE_UTTERANCE` in `config.py`,
   which keep recent spoken replies or the last thing heard in
   `server/debug/` (git-ignored).
-- **Giving the robot away:** your WiFi password, `ROBOT_TOKEN` and clock
+- **Giving the robot away:** your WiFi password, the (now ignored)
+  `ROBOT_TOKEN` and clock
   location live in its flash. Erase it first: `cd firmware && pio run -t erase`.
 - **Known limitation:** robot-to-computer traffic is a plain WebSocket on
   your home network. Someone already on your WiFi who spoofs the computer's address

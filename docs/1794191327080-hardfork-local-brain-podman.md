@@ -1,5 +1,10 @@
 # Hard fork: local-brain server in podman (Linux), Fish Audio removed, browser A/V for testing
 
+> **Update (2026-11-12):** the token gates described below (`ROBOT_TOKEN` check, `CONSOLE_TOKEN`,
+> `PUBLIC_HOST`) were **removed** for simplicity — see CHANGELOG "All tokens removed for now". This
+> document is kept as historical planning context; where it describes tokens, reality is now:
+> ungated LAN robot port, console behind the ssh/tailnet tunnel only.
+
 ## Goal
 
 Reposition the project: the brain server runs headless on a remote Linux box inside rootless podman. The ESP32 robot connects to it directly over the LAN WebSocket (protocol unchanged). The human tests and talks to it from the dashboard page opened via a Tailscale/ssh tunnel, using **that browser's** mic/webcam/speaker as a robot substitute while the real robot is offline. Future robot actions go through APIs/MCP, so all "control the host computer" code is deleted.

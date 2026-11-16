@@ -18,20 +18,17 @@ serves:
   /api/<x>   POST, JSON body: a control action, handed to `command_handler`
               (main.py). Only answers requests that carry the X-Rocky-Console
               header, which a cross-site page can't add without a CORS
-              preflight we never grant.
+               preflight we never grant.
 
-One shared CONSOLE_TOKEN gates all of it (the page is opened with ?token=,
-which it then carries as a header); loopback-only binds may leave it unset.
+Nothing gates it (fork simplification): whatever can reach the port gets the
+console; keep this port on a tunnel, not on the open LAN.
 """
 
 from __future__ import annotations
 
-import ipaddress
 import json
-import secrets
 import threading
 import time
-import urllib.parse
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -130,27 +127,12 @@ class Eyes:
     # ── browser ─────────────────────────────────────────────────────────────
     def serve(self, port: int, bind: str = "127.0.0.1") -> None:
         eyes = self
-        token = config.CONSOLE_TOKEN
-        try:
-            loopback_only = ipaddress.ip_address(bind.split("%")[0]).is_loopback
-        except ValueError:
-            loopback_only = False
-        if token and (len(token) < 16 or token == "change-me"):
-            print(f"(refusing to serve the console: CONSOLE_TOKEN must be a random string of at least 16 "
-                  f"characters, e.g. from `python3 -c \"import secrets; print(secrets.token_hex(16))\"`)")
-            return
-        if not token and not loopback_only:
-            print(f"(refusing to serve the console on {bind}: set CONSOLE_TOKEN in server/.env (it gates the "
-                  f"page, the camera and the controls), or bind loopback only for local development)")
-            return
         page_path = Path(__file__).with_name("dashboard.html")
-        public_host = config.PUBLIC_HOST
 
         def dashboard_bytes() -> bytes:
             # Read fresh each request so dashboard.html edits show up without restarting the brain.
             return (page_path.read_text(encoding="utf-8")
-                    .replace("{name}", config.ROBOT_NAME)
-                    .replace("{console_token}", json.dumps(token)).encode())
+                    .replace("{name}", config.ROBOT_NAME).encode())
 
         class Handler(BaseHTTPRequestHandler):
             server_version = "desk-robot"  # don't advertise the Python version
@@ -159,30 +141,7 @@ class Eyes:
             def log_message(self, *args) -> None:  # keep the console quiet
                 pass
 
-            def _authorized(self, via_query: bool) -> bool:
-                """One shared token gates everything (the tunnel is the only route in, and the token is the
-                real gate; PUBLIC_HOST, when set, is a belt against DNS rebinding). The page itself is opened
-                with ?token=; everything after that (the page holds it in memory) sends it as a header."""
-                if public_host:
-                    host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
-                    if host != public_host:
-                        self._reply(403, "text/plain", b"forbidden")
-                        return False
-                if not token:
-                    return True   # loopback-only bind, local development
-                offered = self.headers.get("X-Rocky-Console-Token", "")
-                if via_query and not offered:
-                    q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-                    offered = (q.get("token") or [""])[0]
-                if not secrets.compare_digest(offered.encode(), token.encode()):
-                    self._reply(403, "text/plain",
-                                b"the console needs its token: open this page with ?token=<CONSOLE_TOKEN> "
-                                b"from server/.env")
-                    return False
-                return True
             def do_POST(self) -> None:
-                if not self._authorized(via_query=False):
-                    return
                 # Controls: a page on another site could still POST here
                 # (browsers allow simple cross-site POSTs), so demand a custom
                 # header — that turns it into a preflighted request, and we
@@ -236,8 +195,6 @@ class Eyes:
                 self._reply(200, "application/json", json.dumps({"ok": True, **(result or {})}).encode())
 
             def do_GET(self) -> None:
-                if not self._authorized(via_query=True):
-                    return
                 if self.path == "/" or self.path.startswith("/?"):
                     self._reply(200, "text/html; charset=utf-8", dashboard_bytes())
                 elif self.path == "/frame":
